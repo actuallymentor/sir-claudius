@@ -265,16 +265,18 @@ elif [ "$SANDBOX" = false ]; then
 fi
 
 # Mount host config so Claude skips onboarding and reads user settings
-# Writable copy so Claude can persist workspace trust and session state
-CLAUDE_JSON_TMPFILE=""
+# Always create a writable copy so Claude can persist workspace trust and session state
+CLAUDE_JSON_TMPFILE=$(mktemp)
 if [ -f "$HOME/.claude.json" ]; then
-    CLAUDE_JSON_TMPFILE=$(mktemp)
     cp "$HOME/.claude.json" "$CLAUDE_JSON_TMPFILE"
-    chmod 600 "$CLAUDE_JSON_TMPFILE"
+else
+    echo '{}' > "$CLAUDE_JSON_TMPFILE"
+fi
+chmod 600 "$CLAUDE_JSON_TMPFILE"
 
-    # Pre-seed workspace trust for /workspace to skip the trust dialog
-    if command -v python3 > /dev/null 2>&1; then
-        python3 -c "
+# Pre-seed workspace trust for /workspace to skip the trust dialog
+if command -v python3 > /dev/null 2>&1; then
+    python3 -c "
 import json, sys
 with open(sys.argv[1], 'r') as f:
     data = json.load(f)
@@ -282,14 +284,13 @@ data.setdefault('projects', {}).setdefault('/workspace', {'allowedTools': []})
 with open(sys.argv[1], 'w') as f:
     json.dump(data, f)
 " "$CLAUDE_JSON_TMPFILE" 2>/dev/null || true
-    fi
-
-    if [ "$SANDBOX" = true ]; then
-        docker_flags+=( -v "$CLAUDE_JSON_TMPFILE:/home/node/.claude.json:ro" )
-    else
-        docker_flags+=( -v "$CLAUDE_JSON_TMPFILE:/home/node/.claude.json" )
-    fi
+elif command -v jq > /dev/null 2>&1; then
+    jq '.projects //= {} | .projects["/workspace"] //= {"allowedTools": []}' \
+        "$CLAUDE_JSON_TMPFILE" > "$CLAUDE_JSON_TMPFILE.tmp" \
+        && mv "$CLAUDE_JSON_TMPFILE.tmp" "$CLAUDE_JSON_TMPFILE" 2>/dev/null || true
 fi
+
+docker_flags+=( -v "$CLAUDE_JSON_TMPFILE:/home/node/.claude.json" )
 # In yolo mode, create a writable copy of settings.json with the bypass
 # confirmation pre-accepted so Claude Code skips the "Bypass Permissions" dialog
 SETTINGS_TMPFILE=""
