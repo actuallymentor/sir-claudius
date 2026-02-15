@@ -1,0 +1,498 @@
+#!/bin/bash
+set -e
+
+# -----------------------------------------------------------
+# claudius — run Claude Code inside a Docker container
+# -----------------------------------------------------------
+
+CLAUDIUS_VERSION="0.1.3"
+REPO_URL="https://raw.githubusercontent.com/actuallymentor/sir-claudius/main/claudius"
+
+IMAGE="${CLAUDE_SANDBOX_IMAGE:-actuallymentor/sir-claudius:latest}"
+MODEL="${CLAUDE_MODEL:-claude-opus-4-6}"
+TOKEN_FILE="$HOME/.claude-sandbox-token"
+
+# ---- --version flag ----
+if [ "${1:-}" = "--version" ] || [ "${1:-}" = "-v" ]; then
+    echo "claudius $CLAUDIUS_VERSION"
+    exit 0
+fi
+
+# ---- --help flag ----
+if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+    cat <<'EOF'
+claudius — run Claude Code inside a Docker container
+
+Usage: claudius [command...] [options] [-- claude args...]
+
+Commands (chainable — combine in any order):
+  yolo        Run with blanket permissions (--dangerously-skip-permissions)
+  sandbox     Run without mounting a workspace; host files are read-only
+  mudbox      Mount the workspace as read-only (explore code without modifying it)
+  continue    Resume the most recent session (--continue)
+  resume      Pick a session to resume, or pass a name (--resume)
+
+Standalone commands:
+  setup       Authenticate and save an OAuth token
+  update      Fetch the latest script and pull the Docker image
+  rebuild     Force-rebuild the Docker image with --no-cache
+
+Options:
+  --help, -h      Show this help message
+  --version, -v   Show the claudius version
+
+Examples:
+  claudius                        Interactive session in the current directory
+  claudius yolo                   Skip all permission prompts
+  claudius mudbox                 Read-only workspace (code review, exploration)
+  claudius yolo mudbox            Read-only workspace + skip permissions
+  claudius sandbox yolo           No workspace + skip permissions
+  claudius mudbox continue        Read-only workspace + resume last session
+
+Environment variables:
+  CLAUDE_SANDBOX_IMAGE   Docker image to use (default: actuallymentor/sir-claudius:latest)
+  CLAUDE_MODEL           Model to use (default: claude-opus-4-6)
+  CLAUDE_CODE_OAUTH_TOKEN  OAuth token (skips credential lookup)
+  ANTHROPIC_API_KEY      API key (fallback if no OAuth token)
+
+All other arguments are passed through to Claude Code inside the container.
+EOF
+    exit 0
+fi
+
+# ---- setup subcommand: obtain a long-lived OAuth token ----
+if [ "${1:-}" = "setup" ]; then
+
+    echo "Opening browser to authenticate with Claude..."
+    echo "The resulting token will be saved to $TOKEN_FILE"
+    echo ""
+
+    # claude setup-token prints the token to stdout
+    # Strip ANSI codes and extract just the token (starts with sk-ant-)
+    token=$(claude setup-token | sed 's/\x1b\[[0-9;]*[A-Za-z]//g' | grep -o 'sk-ant-[A-Za-z0-9_-]*' | head -n 1)
+
+    if [ -z "$token" ]; then
+        echo "Error: no token received from claude setup-token" >&2
+        exit 1
+    fi
+
+    # Save with restricted permissions (owner read/write only)
+    printf '%s' "$token" > "$TOKEN_FILE"
+    chmod 600 "$TOKEN_FILE"
+
+    echo ""
+    echo "Token saved to $TOKEN_FILE"
+    echo "You can now run: claudius"
+    exit 0
+
+fi
+
+# ---- update subcommand: fetch latest script from GitHub and pull image ----
+if [ "${1:-}" = "update" ]; then
+
+    # When invoked via PATH, $0 has no directory component — resolve with command -v
+    case "$0" in
+        */*) SCRIPT_PATH="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")" ;;
+        *)   SCRIPT_PATH="$(command -v "$0")" ;;
+    esac
+
+    # Download the latest script from GitHub
+    echo "Fetching latest claudius from GitHub..." >&2
+    TEMP_FILE=$(mktemp)
+    trap "rm -f $TEMP_FILE" EXIT INT TERM
+
+    if ! curl -fsSL --max-time 30 "$REPO_URL" -o "$TEMP_FILE"; then
+        echo "Error: failed to download from $REPO_URL" >&2
+        exit 1
+    fi
+
+    # Replace the current script, using sudo if needed
+    # Check the parent directory (not the file) since mv needs directory write permission
+    if [ -w "$(dirname "$SCRIPT_PATH")" ]; then
+        mv "$TEMP_FILE" "$SCRIPT_PATH"
+        chmod +x "$SCRIPT_PATH"
+    elif command -v sudo > /dev/null 2>&1; then
+        echo "Writing to $SCRIPT_PATH requires elevated permissions..." >&2
+        sudo mv "$TEMP_FILE" "$SCRIPT_PATH"
+        sudo chmod +x "$SCRIPT_PATH"
+    else
+        echo "Error: cannot write to $SCRIPT_PATH and sudo is not available" >&2
+        exit 1
+    fi
+
+    echo "Script updated." >&2
+
+    # Pull the latest Docker image
+    echo "Pulling $IMAGE..." >&2
+    if docker pull "$IMAGE"; then
+        echo "Image $IMAGE updated." >&2
+    else
+        echo "Warning: image pull failed (you may need to rebuild locally)" >&2
+    fi
+
+    echo "Update complete." >&2
+    exit 0
+
+fi
+
+# ---- rebuild subcommand: force rebuild with --no-cache ----
+if [ "${1:-}" = "rebuild" ]; then
+
+    echo "Rebuilding $IMAGE with --no-cache..." >&2
+    # When invoked via PATH, $0 has no directory component — resolve with command -v
+    case "$0" in
+        */*) SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)" ;;
+        *)   SCRIPT_DIR="$(dirname "$(command -v "$0")")" ;;
+    esac
+
+    if [ ! -f "$SCRIPT_DIR/Dockerfile" ]; then
+        echo "Error: Dockerfile not found at $SCRIPT_DIR/Dockerfile" >&2
+        exit 1
+    fi
+
+    docker build --no-cache -t "$IMAGE" "$SCRIPT_DIR"
+    echo "Image $IMAGE rebuilt." >&2
+    exit 0
+
+fi
+
+# ---- parse chainable subcommands ----
+# Commands like yolo, sandbox, mudbox, continue, and resume can be
+# combined in any order: claudius yolo mudbox, claudius sandbox continue, etc.
+YOLO=false
+SANDBOX=false
+MUDBOX=false
+CONTINUE=false
+RESUME=false
+RESUME_NAME=""
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        yolo)      YOLO=true; shift ;;
+        sandbox)   SANDBOX=true; shift ;;
+        mudbox)    MUDBOX=true; shift ;;
+        continue)  CONTINUE=true; shift ;;
+        resume)
+            RESUME=true; shift
+            # Next non-flag, non-subcommand argument is the session name
+            if [ $# -gt 0 ] && [[ "${1:-}" != -* ]]; then
+                case "$1" in
+                    yolo|sandbox|mudbox|continue|resume) ;;
+                    *) RESUME_NAME="$1"; shift ;;
+                esac
+            fi
+            ;;
+        *)  break ;;
+    esac
+done
+
+# ---- check for updates (non-blocking, 5s timeout) ----
+check_for_update() {
+    local remote_version
+    remote_version=$(curl -fsSL --max-time 5 \
+        "$REPO_URL" 2>/dev/null \
+        | grep -m1 '^CLAUDIUS_VERSION=' | cut -d'"' -f2)
+
+    if [ -n "$remote_version" ] && [ "$remote_version" != "$CLAUDIUS_VERSION" ]; then
+        echo "claudius $CLAUDIUS_VERSION → $remote_version available. Run: claudius update" >&2
+    fi
+}
+check_for_update &
+
+# ---- resolve authentication ----
+# Priority: env var > host Claude CLI credentials file > token file > API key
+#
+# When we can get the full credentials JSON (with refresh token), we mount
+# it into the container as .credentials.json. This lets Claude Code handle
+# its own token refresh — no more expired tokens in long sessions.
+OAUTH_TOKEN="${CLAUDE_CODE_OAUTH_TOKEN:-}"
+CREDS_TMPFILE=""
+
+# When no explicit token, try to mount the host's full credentials
+if [ -z "$OAUTH_TOKEN" ]; then
+
+    CREDS_JSON=""
+
+    # On macOS, extract credentials from the Keychain
+    if command -v security > /dev/null 2>&1; then
+        CREDS_JSON=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null || true)
+    fi
+
+    # On Linux, read the credentials file
+    if [ -z "$CREDS_JSON" ] && [ -f "$HOME/.claude/.credentials.json" ]; then
+        CREDS_JSON=$(cat "$HOME/.claude/.credentials.json")
+    fi
+
+    # Write full credentials to a temp file for mounting into the container.
+    # This gives Claude Code the refresh token so it can renew access tokens
+    # on its own — no host-side refresh needed.
+    if [ -n "$CREDS_JSON" ]; then
+        CREDS_TMPFILE=$(mktemp)
+        printf '%s' "$CREDS_JSON" > "$CREDS_TMPFILE"
+        chmod 600 "$CREDS_TMPFILE"
+    fi
+
+fi
+
+# Fall back to the claudius setup token file (static token, no refresh)
+if [ -z "$CREDS_TMPFILE" ] && [ -z "$OAUTH_TOKEN" ] && [ -f "$TOKEN_FILE" ]; then
+    OAUTH_TOKEN=$(sed 's/\x1b\[[0-9;]*[A-Za-z]//g' "$TOKEN_FILE" | grep -o 'sk-ant-[A-Za-z0-9_-]*' | head -n 1)
+fi
+
+# Bail if we have no authentication at all
+if [ -z "$CREDS_TMPFILE" ] && [ -z "$OAUTH_TOKEN" ] && [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+    echo "No authentication found." >&2
+    echo "" >&2
+    echo "Run:  claudius setup" >&2
+    echo "  or: export ANTHROPIC_API_KEY=sk-..." >&2
+    exit 1
+fi
+
+# ---- build docker run flags ----
+docker_flags=( --rm )
+
+# Interactive/TTY detection
+if [ -t 0 ]; then
+    docker_flags+=( -it )
+fi
+
+# Mount project directory as the workspace
+# Mudbox: read-only mount — Sandbox: no mount — Normal: read-write mount
+if [ "$MUDBOX" = true ]; then
+    docker_flags+=( -v "$(pwd):/workspace:ro" )
+elif [ "$SANDBOX" = false ]; then
+    docker_flags+=( -v "$(pwd):/workspace" )
+fi
+
+# Mount host config so Claude skips onboarding and reads user settings
+# Writable copy so Claude can persist workspace trust and session state
+CLAUDE_JSON_TMPFILE=""
+if [ -f "$HOME/.claude.json" ]; then
+    CLAUDE_JSON_TMPFILE=$(mktemp)
+    cp "$HOME/.claude.json" "$CLAUDE_JSON_TMPFILE"
+    chmod 600 "$CLAUDE_JSON_TMPFILE"
+
+    # Pre-seed workspace trust for /workspace to skip the trust dialog
+    if command -v python3 > /dev/null 2>&1; then
+        python3 -c "
+import json, sys
+with open(sys.argv[1], 'r') as f:
+    data = json.load(f)
+data.setdefault('projects', {}).setdefault('/workspace', {'allowedTools': []})
+with open(sys.argv[1], 'w') as f:
+    json.dump(data, f)
+" "$CLAUDE_JSON_TMPFILE" 2>/dev/null || true
+    fi
+
+    if [ "$SANDBOX" = true ]; then
+        docker_flags+=( -v "$CLAUDE_JSON_TMPFILE:/home/node/.claude.json:ro" )
+    else
+        docker_flags+=( -v "$CLAUDE_JSON_TMPFILE:/home/node/.claude.json" )
+    fi
+fi
+# In yolo mode, create a writable copy of settings.json with the bypass
+# confirmation pre-accepted so Claude Code skips the "Bypass Permissions" dialog
+SETTINGS_TMPFILE=""
+if [ "$YOLO" = true ]; then
+    SETTINGS_TMPFILE=$(mktemp)
+    if [ -f "$HOME/.claude/settings.json" ]; then
+        cp "$HOME/.claude/settings.json" "$SETTINGS_TMPFILE"
+    else
+        echo '{}' > "$SETTINGS_TMPFILE"
+    fi
+    chmod 600 "$SETTINGS_TMPFILE"
+
+    if command -v python3 > /dev/null 2>&1; then
+        python3 -c "
+import json, sys
+with open(sys.argv[1], 'r') as f:
+    data = json.load(f)
+data['skipDangerousModePermissionPrompt'] = True
+with open(sys.argv[1], 'w') as f:
+    json.dump(data, f)
+" "$SETTINGS_TMPFILE" 2>/dev/null || true
+    fi
+
+    docker_flags+=( -v "$SETTINGS_TMPFILE:/home/node/.claude/settings.json" )
+fi
+
+for config_file in settings.json settings.local.json CLAUDE.md; do
+    # Skip settings.json when we already mounted the yolo-patched copy
+    if [ "$config_file" = "settings.json" ] && [ -n "$SETTINGS_TMPFILE" ]; then
+        continue
+    fi
+    if [ -f "$HOME/.claude/$config_file" ]; then
+        docker_flags+=( -v "$HOME/.claude/$config_file:/home/node/.claude/$config_file:ro" )
+    fi
+done
+
+# Mount skills directory if it exists
+if [ -d "$HOME/.claude/skills" ]; then
+    docker_flags+=( -v "$HOME/.claude/skills:/home/node/.claude/skills:ro" )
+fi
+
+# Persistent named volumes for MCP server package caches
+# These survive --rm so MCP servers don't re-download every run
+docker_flags+=( -v "claudius-npm-cache:/home/node/.npm" )
+docker_flags+=( -v "claudius-npm-global:/home/node/.npm-global" )
+docker_flags+=( -v "claudius-uv-cache:/home/node/.cache" )
+
+# Share Claude session state with host so --continue and --resume find
+# sessions created on the host or in previous container runs
+HOST_CLAUDE_DIR="$HOME/.claude"
+mkdir -p "$HOST_CLAUDE_DIR/projects" "$HOST_CLAUDE_DIR/plans" "$HOST_CLAUDE_DIR/todos"
+if [ "$SANDBOX" = true ]; then
+    docker_flags+=( -v "$HOST_CLAUDE_DIR/projects:/home/node/.claude/projects:ro" )
+    docker_flags+=( -v "$HOST_CLAUDE_DIR/plans:/home/node/.claude/plans:ro" )
+    docker_flags+=( -v "$HOST_CLAUDE_DIR/todos:/home/node/.claude/todos:ro" )
+else
+    docker_flags+=( -v "$HOST_CLAUDE_DIR/projects:/home/node/.claude/projects" )
+    docker_flags+=( -v "$HOST_CLAUDE_DIR/plans:/home/node/.claude/plans" )
+    docker_flags+=( -v "$HOST_CLAUDE_DIR/todos:/home/node/.claude/todos" )
+fi
+
+# Persist session history so the interactive picker shows previous sessions
+# touch is safe on existing files (preserves content) and bootstraps the file for new users
+touch "$HOST_CLAUDE_DIR/history.jsonl"
+if [ "$SANDBOX" = true ]; then
+    docker_flags+=( -v "$HOST_CLAUDE_DIR/history.jsonl:/home/node/.claude/history.jsonl:ro" )
+else
+    docker_flags+=( -v "$HOST_CLAUDE_DIR/history.jsonl:/home/node/.claude/history.jsonl" )
+fi
+
+# Loosen seccomp so MCP servers that spawn child processes (browsers,
+# language runtimes, etc.) work without hitting blocked-syscall errors.
+# The container itself is the security boundary.
+docker_flags+=( --security-opt "seccomp=unconfined" )
+
+# Pass authentication — prefer mounting credentials file (supports refresh)
+# over a static token env var (expires and can't be renewed)
+if [ -n "$CREDS_TMPFILE" ]; then
+    docker_flags+=( -v "$CREDS_TMPFILE:/home/node/.claude/.credentials.json" )
+elif [ -n "$OAUTH_TOKEN" ]; then
+    docker_flags+=( -e "CLAUDE_CODE_OAUTH_TOKEN=$OAUTH_TOKEN" )
+fi
+
+if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+    docker_flags+=( -e "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY" )
+fi
+
+# Set the model
+docker_flags+=( -e "CLAUDE_MODEL=$MODEL" )
+
+# Expose the run mode inside the container for scripts and agents to check
+# Priority: yolo > mudbox > sandbox > regular
+if [ "$YOLO" = true ]; then
+    docker_flags+=( -e "CLAUDIUS_MODE=yolo" )
+elif [ "$MUDBOX" = true ]; then
+    docker_flags+=( -e "CLAUDIUS_MODE=mudbox" )
+elif [ "$SANDBOX" = true ]; then
+    docker_flags+=( -e "CLAUDIUS_MODE=sandbox" )
+else
+    docker_flags+=( -e "CLAUDIUS_MODE=regular" )
+fi
+
+# Build Claude CLI flags
+claude_flags=( --model "$MODEL" )
+
+# Base system prompt: orient Claude to the container environment
+SYSTEM_PROMPT="You are running inside a Claudius Docker container — an isolated sandbox built for coding agents. You have passwordless sudo for any operation that needs root. Your workspace is /workspace (bind-mounted from the host). For a full reference of installed CLI tools and capabilities, read /home/node/AGENTS.md.
+
+Do NOT add Co-Authored-By lines to git commit messages. The git author identity is already configured via environment variables."
+
+# In sandbox mode, tell Claude there is no workspace
+if [ "$SANDBOX" = true ]; then
+    SYSTEM_PROMPT="$SYSTEM_PROMPT
+
+You are running in SANDBOX mode (CLAUDIUS_MODE=sandbox). There is no workspace mounted — the /workspace directory is empty and container-local. All host files are mounted read-only. You cannot modify anything on the host. Use this session for general questions, research, brainstorming, or tasks that don't need access to a project."
+fi
+
+# In mudbox mode, tell Claude the workspace is read-only
+if [ "$MUDBOX" = true ]; then
+    SYSTEM_PROMPT="$SYSTEM_PROMPT
+
+You are running in MUDBOX mode (CLAUDIUS_MODE=mudbox). The workspace at /workspace is mounted READ-ONLY from the host. You can read and explore all project files but cannot modify them. Use this mode for code review, analysis, exploration, or generating patches. Any files you need to create must go in a container-local directory outside /workspace."
+fi
+
+# In yolo mode, extend the prompt with autonomy instructions
+if [ "$YOLO" = true ]; then
+    claude_flags+=( --dangerously-skip-permissions )
+    SYSTEM_PROMPT="$SYSTEM_PROMPT
+
+You are running in YOLO mode (CLAUDIUS_MODE=yolo). The environment variable \$CLAUDIUS_MODE is set to 'yolo'. In this mode you are expected to act with maximum autonomy — fulfill the user's intent with as little interaction as possible. Do not ask for confirmation before taking actions. Prefer doing over asking. If a task is ambiguous, make a reasonable choice and proceed."
+fi
+
+claude_flags+=( --append-system-prompt "$SYSTEM_PROMPT" )
+
+# Resume most recent session
+if [ "$CONTINUE" = true ]; then
+    claude_flags+=( --continue )
+fi
+
+# Resume a specific or picked session
+if [ "$RESUME" = true ]; then
+    if [ -n "$RESUME_NAME" ]; then
+        claude_flags+=( --resume "$RESUME_NAME" )
+    else
+        claude_flags+=( --resume )
+    fi
+fi
+
+# ---- ensure the image is available ----
+if ! docker image inspect "$IMAGE" > /dev/null 2>&1; then
+
+    echo "Image $IMAGE not found locally, pulling..." >&2
+    if ! docker pull "$IMAGE"; then
+
+        echo "Pull failed, building image locally..." >&2
+        # When invoked via PATH, $0 has no directory component — resolve with command -v
+    case "$0" in
+        */*) SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)" ;;
+        *)   SCRIPT_DIR="$(dirname "$(command -v "$0")")" ;;
+    esac
+
+        if [ ! -f "$SCRIPT_DIR/Dockerfile" ]; then
+            echo "Error: Dockerfile not found at $SCRIPT_DIR/Dockerfile" >&2
+            exit 1
+        fi
+
+        docker build -t "$IMAGE" "$SCRIPT_DIR"
+
+    fi
+
+    echo "Image $IMAGE is ready." >&2
+
+fi
+
+# ---- clean up temporary files on exit ----
+cleanup() {
+    [ -n "$CLAUDE_JSON_TMPFILE" ] && rm -f "$CLAUDE_JSON_TMPFILE"
+    [ -n "$SETTINGS_TMPFILE" ] && rm -f "$SETTINGS_TMPFILE"
+    [ -n "$CREDS_TMPFILE" ] && rm -f "$CREDS_TMPFILE"
+}
+trap cleanup EXIT
+
+# ---- run claude in the container ----
+
+# Record history state so we can detect new sessions
+HISTORY_FILE="$HOST_CLAUDE_DIR/history.jsonl"
+history_lines_before=0
+if [ -f "$HISTORY_FILE" ]; then
+    history_lines_before=$(wc -l < "$HISTORY_FILE")
+fi
+
+docker run "${docker_flags[@]}" "$IMAGE" "${claude_flags[@]}" "$@"
+exit_code=$?
+
+# Show claudius resume hint if a session was active
+if [ -f "$HISTORY_FILE" ]; then
+    history_lines_after=$(wc -l < "$HISTORY_FILE")
+    if [ "$history_lines_after" -gt "$history_lines_before" ]; then
+        session_id=$(tail -1 "$HISTORY_FILE" | grep -o '"sessionId":"[^"]*"' | head -1 | cut -d'"' -f4)
+        if [ -n "$session_id" ]; then
+            printf '\n  Resume this session with: claudius resume %s\n\n' "$session_id"
+        fi
+    fi
+fi
+
+exit $exit_code
