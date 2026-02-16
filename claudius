@@ -5,7 +5,7 @@ set -e
 # claudius — run Claude Code inside a Docker container
 # -----------------------------------------------------------
 
-CLAUDIUS_VERSION="0.1.4"
+CLAUDIUS_VERSION="0.1.5"
 REPO_URL="https://raw.githubusercontent.com/actuallymentor/sir-claudius/main/claudius"
 
 IMAGE="${CLAUDE_SANDBOX_IMAGE:-actuallymentor/sir-claudius:latest}"
@@ -36,7 +36,7 @@ Standalone commands:
   setup       Authenticate and save an OAuth token
   update      Fetch the latest script and pull the Docker image
   rebuild     Force-rebuild the Docker image with --no-cache
-  history     List previous sessions with resume commands
+  history     List previous sessions (default: 15, or pass a number / "all")
 
 Options:
   --help, -h      Show this help message
@@ -49,6 +49,9 @@ Examples:
   claudius yolo mudbox            Read-only workspace + skip permissions
   claudius sandbox yolo           No workspace + skip permissions
   claudius mudbox continue        Read-only workspace + resume last session
+  claudius history                Show the 15 most recent sessions
+  claudius history 50             Show the 50 most recent sessions
+  claudius history all            Show all sessions
 
 Environment variables:
   CLAUDE_SANDBOX_IMAGE   Docker image to use (default: actuallymentor/sir-claudius:latest)

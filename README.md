@@ -37,6 +37,11 @@ claudius update
 # Force rebuild the local image with --no-cache
 claudius rebuild
 
+# List previous sessions with resume commands
+claudius history              # shows 15 most recent
+claudius history 50           # shows 50 most recent
+claudius history all          # shows all sessions
+
 # Skip all permission prompts (--dangerously-skip-permissions)
 claudius yolo
 
