@@ -209,7 +209,12 @@ for entry in sorted_sessions:
     # Use the session name if available, otherwise the session ID
     label = name if name else sid
 
-    print(f'{ts} | claudius resume {label}')
+    # Use the first prompt as a summary, truncated to keep output readable
+    summary = entry.get('firstPrompt', '').replace('\n', ' ').strip()
+    if len(summary) > 60:
+        summary = summary[:57] + '...'
+
+    print(f'{ts} | claudius resume {label} | {summary}')
 "
     else
         echo "Error: python3 is required for the history command" >&2
