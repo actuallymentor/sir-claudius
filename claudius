@@ -164,6 +164,12 @@ fi
 if [ "${1:-}" = "history" ]; then
 
     HOST_CLAUDE_DIR="$HOME/.claude"
+    HISTORY_FILE="$HOST_CLAUDE_DIR/history.jsonl"
+
+    if [ ! -f "$HISTORY_FILE" ] || [ ! -s "$HISTORY_FILE" ]; then
+        echo "No sessions found." >&2
+        exit 0
+    fi
 
     # Parse optional limit: "claudius history 50" or "claudius history all"
     HISTORY_LIMIT="${2:-15}"
@@ -171,65 +177,79 @@ if [ "${1:-}" = "history" ]; then
         HISTORY_LIMIT="0"
     fi
 
-    # Collect sessions from all sessions-index.json files and format them
+    # Read history.jsonl — each line is a prompt entry with sessionId, timestamp, display, project
+    # Deduplicate by sessionId, keeping the first prompt and latest timestamp
     if command -v python3 > /dev/null 2>&1; then
         python3 -c "
-import json, glob, os, sys
-from datetime import datetime
+import json, sys, os
+from datetime import datetime, timezone
 
-claude_dir = os.path.expanduser('~/.claude')
+history_file = sys.argv[1]
+limit = int(sys.argv[2]) if len(sys.argv) > 2 else 15
+
 sessions = {}
 
-# Gather sessions from all sessions-index.json files
-for index_file in glob.glob(os.path.join(claude_dir, 'projects', '*', 'sessions-index.json')):
-    try:
-        with open(index_file) as f:
-            data = json.load(f)
-        for entry in data.get('entries', []):
-            sid = entry.get('sessionId', '')
-            if not sid:
-                continue
-            # Keep the entry with the latest modification time
-            modified = entry.get('modified', '')
-            if sid not in sessions or modified > sessions[sid].get('modified', ''):
-                sessions[sid] = entry
-    except (json.JSONDecodeError, IOError):
-        continue
+with open(history_file) as f:
+    for line in f:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+
+        sid = entry.get('sessionId', '')
+        if not sid:
+            continue
+
+        ts = entry.get('timestamp', 0)
+        prompt = entry.get('display', '').strip()
+        project = entry.get('project', '')
+
+        if sid not in sessions:
+            sessions[sid] = {
+                'sessionId': sid,
+                'first_prompt': prompt,
+                'latest_ts': ts,
+                'project': project,
+            }
+        else:
+            # Update latest timestamp, keep the first non-empty prompt
+            if ts > sessions[sid]['latest_ts']:
+                sessions[sid]['latest_ts'] = ts
+            if not sessions[sid]['first_prompt'] and prompt:
+                sessions[sid]['first_prompt'] = prompt
 
 if not sessions:
     print('No sessions found.', file=sys.stderr)
     sys.exit(0)
 
-# Sort by modified time, most recent first
-sorted_sessions = sorted(sessions.values(), key=lambda s: s.get('modified', ''), reverse=True)
+# Sort by latest timestamp, most recent first
+sorted_sessions = sorted(sessions.values(), key=lambda s: s['latest_ts'], reverse=True)
 
 # Apply limit (0 means no limit)
-limit = int(sys.argv[1]) if len(sys.argv) > 1 else 15
 if limit > 0:
     sorted_sessions = sorted_sessions[:limit]
 
 for entry in sorted_sessions:
-    modified = entry.get('modified', '')
-    sid = entry.get('sessionId', '')
-    name = entry.get('name', '')
+    ts = entry['latest_ts']
+    sid = entry['sessionId']
 
-    # Parse the ISO timestamp into HH:MM DD-MM-YYYY
+    # Convert epoch ms to HH:MM DD-MM-YYYY
     try:
-        dt = datetime.fromisoformat(modified.replace('Z', '+00:00'))
-        ts = dt.strftime('%H:%M %d-%m-%Y')
-    except (ValueError, AttributeError):
-        ts = '??:?? ??-??-????'
+        dt = datetime.fromtimestamp(ts / 1000, tz=timezone.utc).astimezone()
+        ts_str = dt.strftime('%H:%M %d-%m-%Y')
+    except (ValueError, OSError):
+        ts_str = '??:?? ??-??-????'
 
-    # Use the session name if available, otherwise the session ID
-    label = name if name else sid
-
-    # Use the first prompt as a summary, truncated to keep output readable
-    summary = entry.get('firstPrompt', '').replace('\n', ' ').strip()
+    # Truncate prompt for readability
+    summary = entry['first_prompt'].replace('\n', ' ').strip()
     if len(summary) > 60:
         summary = summary[:57] + '...'
 
-    print(f'{ts} | claudius resume {label} | {summary}')
-" "$HISTORY_LIMIT"
+    print(f'{ts_str} | claudius resume {sid} | {summary}')
+" "$HISTORY_FILE" "$HISTORY_LIMIT"
     else
         echo "Error: python3 is required for the history command" >&2
         exit 1
