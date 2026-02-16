@@ -162,6 +162,12 @@ if [ "${1:-}" = "history" ]; then
 
     HOST_CLAUDE_DIR="$HOME/.claude"
 
+    # Parse optional limit: "claudius history 50" or "claudius history all"
+    HISTORY_LIMIT="${2:-15}"
+    if [ "$HISTORY_LIMIT" = "all" ]; then
+        HISTORY_LIMIT="0"
+    fi
+
     # Collect sessions from all sessions-index.json files and format them
     if command -v python3 > /dev/null 2>&1; then
         python3 -c "
@@ -194,6 +200,11 @@ if not sessions:
 # Sort by modified time, most recent first
 sorted_sessions = sorted(sessions.values(), key=lambda s: s.get('modified', ''), reverse=True)
 
+# Apply limit (0 means no limit)
+limit = int(sys.argv[1]) if len(sys.argv) > 1 else 15
+if limit > 0:
+    sorted_sessions = sorted_sessions[:limit]
+
 for entry in sorted_sessions:
     modified = entry.get('modified', '')
     sid = entry.get('sessionId', '')
@@ -215,7 +226,7 @@ for entry in sorted_sessions:
         summary = summary[:57] + '...'
 
     print(f'{ts} | claudius resume {label} | {summary}')
-"
+" "$HISTORY_LIMIT"
     else
         echo "Error: python3 is required for the history command" >&2
         exit 1
