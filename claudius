@@ -385,6 +385,30 @@ if [ -z "$CREDS_TMPFILE" ] && [ -z "$OAUTH_TOKEN" ] && [ -z "${ANTHROPIC_API_KEY
     exit 1
 fi
 
+# ---- safety check: warn if mounting $HOME or / as workspace ----
+if [ "$SANDBOX" = false ]; then
+    RESOLVED_PWD="$(pwd -P)"
+    RESOLVED_HOME="$(cd "$HOME" && pwd -P)"
+
+    if [ "$RESOLVED_PWD" = "/" ] || [ "$RESOLVED_PWD" = "$RESOLVED_HOME" ]; then
+        if [ "$RESOLVED_PWD" = "/" ]; then
+            warn_dir="the root directory (/)"
+        else
+            warn_dir="your home directory ($HOME)"
+        fi
+        printf 'Warning: about to mount %s as the container workspace.\n' "$warn_dir" >&2
+        printf 'Are you sure? [y/N] ' >&2
+        read -r confirm
+        case "$confirm" in
+            [yY]) ;;
+            *)
+                echo "Aborted." >&2
+                exit 1
+                ;;
+        esac
+    fi
+fi
+
 # ---- build docker run flags ----
 docker_flags=( --rm )
 
