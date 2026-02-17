@@ -148,8 +148,52 @@ Claudius resolves credentials in this order:
 | `~/.claude/settings.local.json` | `/home/node/.claude/settings.local.json` | read-only | Local settings overrides |
 | `~/.claude/CLAUDE.md` | `/home/node/.claude/CLAUDE.md` | read-only | Global instructions |
 | `~/.claude/skills/` | `/home/node/.claude/skills/` | read-only | Custom skills |
+| `~/.claudius/workspaces/<hash>/node_modules` | `/workspace/node_modules` | read-write | Linux-specific node_modules (see below) |
 | `claudius-npm-cache` (volume) | `/home/node/.npm` | read-write | npm/npx package cache |
 | `claudius-uv-cache` (volume) | `/home/node/.cache` | read-write | uv/pip package cache |
+
+## node_modules isolation
+
+When running on a macOS host, `npm install` inside the Linux container downloads platform-specific native binaries that differ from the host's. Without isolation, these Linux binaries end up in the host's `node_modules` (via the bind mount), breaking your local macOS setup — and vice versa.
+
+Claudius solves this automatically. Each project gets a **persistent, Linux-specific `node_modules`** that overlays the host's:
+
+```
+~/.claudius/workspaces/<hash>/node_modules/  →  /workspace/node_modules
+```
+
+The hash is derived from the workspace path, so every project gets its own isolated cache. A `.project_path` breadcrumb file records which directory each hash belongs to.
+
+**First run**: the container's `node_modules` starts empty — run `npm install` once and it persists across all future sessions for that project.
+
+**What this means in practice**:
+- The host's `node_modules` is never touched by the container
+- The container gets its own Linux-native binaries that persist across `--rm`
+- No files are added to the project repository
+- Works automatically with no configuration
+
+To disable isolation (e.g. for a project with no native dependencies):
+
+```sh
+CLAUDIUS_NPM_ISOLATE=0 claudius
+```
+
+To clear all cached `node_modules`:
+
+```sh
+rm -rf ~/.claudius/workspaces
+```
+
+To clear the cache for a specific project, find its hash:
+
+```sh
+# List all cached workspaces with their project paths
+for f in ~/.claudius/workspaces/*/.project_path; do
+  echo "$(basename "$(dirname "$f")"): $(cat "$f")"
+done
+```
+
+> **Note**: This only isolates the root `/workspace/node_modules`. Monorepo packages with nested `node_modules` directories share the host mount. For most projects (and hoisted monorepos) the root overlay is sufficient.
 
 ## MCP servers
 
@@ -180,6 +224,8 @@ docker volume rm claudius-npm-cache claudius-uv-cache
 | `CLAUDE_CODE_OAUTH_TOKEN` | | Override the saved OAuth token |
 | `ANTHROPIC_API_KEY` | | Use an API key instead of OAuth |
 | `CLAUDE_SANDBOX_IMAGE` | `actuallymentor/sir-claudius:latest` | Pin to a specific image |
+| `CLAUDIUS_NPM_ISOLATE` | `1` | Set to `0` to disable node_modules isolation |
+| `CLAUDIUS_DIR` | `~/.claudius` | Override the claudius cache directory |
 
 ## Version pinning
 
