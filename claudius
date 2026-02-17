@@ -456,12 +456,13 @@ if command -v python3 > /dev/null 2>&1; then
 import json, sys
 with open(sys.argv[1], 'r') as f:
     data = json.load(f)
-data.setdefault('projects', {}).setdefault('/workspace', {'allowedTools': []})
+project = data.setdefault('projects', {}).setdefault('/workspace', {'allowedTools': []})
+project['hasTrustDialogAccepted'] = True
 with open(sys.argv[1], 'w') as f:
     json.dump(data, f)
 " "$CLAUDE_JSON_TMPFILE" 2>/dev/null || true
 elif command -v jq > /dev/null 2>&1; then
-    jq '.projects //= {} | .projects["/workspace"] //= {"allowedTools": []}' \
+    jq '.projects //= {} | .projects["/workspace"] //= {"allowedTools": []} | .projects["/workspace"].hasTrustDialogAccepted = true' \
         "$CLAUDE_JSON_TMPFILE" > "$CLAUDE_JSON_TMPFILE.tmp" \
         && mv "$CLAUDE_JSON_TMPFILE.tmp" "$CLAUDE_JSON_TMPFILE" 2>/dev/null || true
 fi
