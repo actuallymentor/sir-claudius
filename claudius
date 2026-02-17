@@ -58,6 +58,16 @@ Environment variables:
   CLAUDE_MODEL           Model to use (default: claude-opus-4-6)
   CLAUDE_CODE_OAUTH_TOKEN  OAuth token (skips credential lookup)
   ANTHROPIC_API_KEY      API key (fallback if no OAuth token)
+  CLAUDIUS_NPM_ISOLATE   Set to 0 to disable node_modules isolation (default: 1)
+  CLAUDIUS_DIR           Override the claudius cache directory (default: ~/.claudius)
+
+node_modules isolation:
+  By default, claudius mounts a Linux-specific node_modules directory over
+  /workspace/node_modules so that platform-native binaries (macOS vs Linux)
+  don't conflict between host and container. Each project gets its own
+  persistent cache under ~/.claudius/workspaces/<hash>/node_modules/.
+  Run \`npm install\` inside the container on first use.
+  Disable with: CLAUDIUS_NPM_ISOLATE=0
 
 All other arguments are passed through to Claude Code inside the container.
 EOF
@@ -365,6 +375,21 @@ if [ "$MUDBOX" = true ]; then
     docker_flags+=( -v "$(pwd):/workspace:ro" )
 elif [ "$SANDBOX" = false ]; then
     docker_flags+=( -v "$(pwd):/workspace" )
+fi
+
+# ---- node_modules isolation ----
+# Mount a Linux-specific node_modules so platform-native binaries (macOS vs
+# Linux) don't conflict between host and container. Each project gets its own
+# persistent cache under ~/.claudius/workspaces/<hash>/node_modules/.
+# Disable with CLAUDIUS_NPM_ISOLATE=0.
+if [ "$SANDBOX" = false ] && [ "$MUDBOX" = false ] && [ "${CLAUDIUS_NPM_ISOLATE:-1}" != "0" ]; then
+    CLAUDIUS_DIR="${CLAUDIUS_DIR:-$HOME/.claudius}"
+    PROJECT_HASH=$(printf '%s' "$(pwd)" | (shasum -a 256 2>/dev/null || sha256sum) | cut -c1-16)
+    NM_CACHE_DIR="$CLAUDIUS_DIR/workspaces/$PROJECT_HASH/node_modules"
+    mkdir -p "$NM_CACHE_DIR"
+    # Breadcrumb: record which workspace path this hash belongs to
+    printf '%s\n' "$(pwd)" > "$CLAUDIUS_DIR/workspaces/$PROJECT_HASH/.project_path"
+    docker_flags+=( -v "$NM_CACHE_DIR:/workspace/node_modules" )
 fi
 
 # Mount host config so Claude skips onboarding and reads user settings
