@@ -189,6 +189,10 @@ if [ "${1:-}" = "history" ]; then
 
     # Read history.jsonl — each line is a prompt entry with sessionId, timestamp, display, project
     # Deduplicate by sessionId, keeping the first prompt and latest timestamp
+    # Load saved session modifiers (yolo, sandbox, mudbox)
+    CLAUDIUS_DIR="${CLAUDIUS_DIR:-$HOME/.claudius}"
+    MODIFIERS_FILE="$CLAUDIUS_DIR/session_modifiers"
+
     if command -v python3 > /dev/null 2>&1; then
         python3 -c "
 import json, sys, os
@@ -196,6 +200,21 @@ from datetime import datetime, timezone
 
 history_file = sys.argv[1]
 limit = int(sys.argv[2]) if len(sys.argv) > 2 else 15
+modifiers_file = sys.argv[3] if len(sys.argv) > 3 else ''
+
+# Load session modifiers (tab-separated: session_id\tmodifiers)
+# Last entry wins so updated sessions get the latest modifiers
+session_modifiers = {}
+if modifiers_file and os.path.isfile(modifiers_file):
+    with open(modifiers_file) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split('\t', 1)
+            sid = parts[0]
+            mods = parts[1] if len(parts) > 1 else ''
+            session_modifiers[sid] = mods
 
 sessions = {}
 
@@ -253,13 +272,18 @@ for entry in sorted_sessions:
     except (ValueError, OSError):
         ts_str = '??:?? ??-??-????'
 
+    # Build resume command with saved modifiers
+    mods = session_modifiers.get(sid, '')
+    mod_prefix = f' {mods}' if mods else ''
+    resume_cmd = f'claudius{mod_prefix} resume {sid}'
+
     # Truncate prompt for readability
     summary = entry['first_prompt'].replace('\n', ' ').strip()
     if len(summary) > 60:
         summary = summary[:57] + '...'
 
-    print(f'{ts_str} | claudius resume {sid} | {summary}')
-" "$HISTORY_FILE" "$HISTORY_LIMIT"
+    print(f'{ts_str} | {resume_cmd} | {summary}')
+" "$HISTORY_FILE" "$HISTORY_LIMIT" "$MODIFIERS_FILE"
     else
         echo "Error: python3 is required for the history command" >&2
         exit 1
@@ -619,7 +643,18 @@ if [ -f "$HISTORY_FILE" ]; then
     if [ "$history_lines_after" -gt "$history_lines_before" ]; then
         session_id=$(tail -1 "$HISTORY_FILE" | grep -o '"sessionId":"[^"]*"' | head -1 | cut -d'"' -f4)
         if [ -n "$session_id" ]; then
-            printf '\n  Resume this session with: claudius resume %s\n\n' "$session_id"
+            # Reconstruct the modifier flags used in this session
+            modifiers=""
+            [ "$YOLO" = true ] && modifiers="$modifiers yolo"
+            [ "$SANDBOX" = true ] && modifiers="$modifiers sandbox"
+            [ "$MUDBOX" = true ] && modifiers="$modifiers mudbox"
+
+            # Persist modifiers so `claudius history` can show them
+            CLAUDIUS_DIR="${CLAUDIUS_DIR:-$HOME/.claudius}"
+            mkdir -p "$CLAUDIUS_DIR"
+            printf '%s\t%s\n' "$session_id" "${modifiers# }" >> "$CLAUDIUS_DIR/session_modifiers"
+
+            printf '\n  Resume this session with:\n  claudius%s resume %s\n\n' "$modifiers" "$session_id"
         fi
     fi
 fi
