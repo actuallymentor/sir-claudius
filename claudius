@@ -5,7 +5,7 @@ set -e
 # claudius — run Claude Code inside a Docker container
 # -----------------------------------------------------------
 
-CLAUDIUS_VERSION="0.3.1"
+CLAUDIUS_VERSION="0.4.0"
 REPO_URL="https://raw.githubusercontent.com/actuallymentor/sir-claudius/main/claudius"
 
 IMAGE="${CLAUDE_SANDBOX_IMAGE:-actuallymentor/sir-claudius:latest}"
@@ -36,7 +36,7 @@ Standalone commands:
   setup       Authenticate and save an OAuth token
   update      Fetch the latest script and pull the Docker image
   rebuild     Force-rebuild the Docker image with --no-cache
-  history     List previous sessions (default: 15, or pass a number / "all")
+  history     List previous sessions (default: 15, or pass a number / "all" / "search text")
 
 Options:
   --help, -h      Show this help message
@@ -52,6 +52,7 @@ Examples:
   claudius history                Show the 15 most recent sessions
   claudius history 50             Show the 50 most recent sessions
   claudius history all            Show all sessions
+  claudius history "npm issue"    Search sessions by description (case-insensitive)
 
 Environment variables:
   CLAUDE_SANDBOX_IMAGE   Docker image to use (default: actuallymentor/sir-claudius:latest)
@@ -191,10 +192,18 @@ if [ "${1:-}" = "history" ]; then
         exit 0
     fi
 
-    # Parse optional limit: "claudius history 50" or "claudius history all"
-    HISTORY_LIMIT="${2:-15}"
-    if [ "$HISTORY_LIMIT" = "all" ]; then
+    # Parse optional argument: number, "all", or a search string
+    HISTORY_ARG="${2:-15}"
+    HISTORY_LIMIT="15"
+    HISTORY_SEARCH=""
+    if [ "$HISTORY_ARG" = "all" ]; then
         HISTORY_LIMIT="0"
+    elif [[ "$HISTORY_ARG" =~ ^[0-9]+$ ]]; then
+        HISTORY_LIMIT="$HISTORY_ARG"
+    else
+        # Non-numeric argument — treat as a search string
+        HISTORY_LIMIT="0"
+        HISTORY_SEARCH="$HISTORY_ARG"
     fi
 
     # Read history.jsonl — each line is a prompt entry with sessionId, timestamp, display, project
@@ -211,6 +220,7 @@ from datetime import datetime, timezone
 history_file = sys.argv[1]
 limit = int(sys.argv[2]) if len(sys.argv) > 2 else 15
 modifiers_file = sys.argv[3] if len(sys.argv) > 3 else ''
+search_query = sys.argv[4].lower() if len(sys.argv) > 4 and sys.argv[4] else ''
 
 # Load session modifiers (tab-separated: session_id\tmodifiers)
 # Last entry wins so updated sessions get the latest modifiers
@@ -267,6 +277,13 @@ if not sessions:
 # Sort by latest timestamp, most recent first
 sorted_sessions = sorted(sessions.values(), key=lambda s: s['latest_ts'], reverse=True)
 
+# Filter by search query (case-insensitive substring match on the first prompt)
+if search_query:
+    sorted_sessions = [s for s in sorted_sessions if search_query in s['first_prompt'].lower()]
+    if not sorted_sessions:
+        print(f'No sessions matching \"{sys.argv[4]}\" found.', file=sys.stderr)
+        sys.exit(0)
+
 # Apply limit (0 means no limit)
 if limit > 0:
     sorted_sessions = sorted_sessions[:limit]
@@ -293,7 +310,7 @@ for entry in sorted_sessions:
         summary = summary[:57] + '...'
 
     print(f'{ts_str} | {resume_cmd} | {summary}')
-" "$HISTORY_FILE" "$HISTORY_LIMIT" "$MODIFIERS_FILE"
+" "$HISTORY_FILE" "$HISTORY_LIMIT" "$MODIFIERS_FILE" "$HISTORY_SEARCH"
     else
         echo "Error: python3 is required for the history command" >&2
         exit 1
