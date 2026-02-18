@@ -120,6 +120,9 @@ if [ "${1:-}" = "update" ]; then
         exit 1
     fi
 
+    # Extract the version from the downloaded script
+    NEW_VERSION=$(grep -m1 '^CLAUDIUS_VERSION=' "$TEMP_FILE" | cut -d'"' -f2)
+
     # Replace the current script, using sudo if needed
     # Check the parent directory (not the file) since mv needs directory write permission
     if [ -w "$(dirname "$SCRIPT_PATH")" ]; then
@@ -134,7 +137,14 @@ if [ "${1:-}" = "update" ]; then
         exit 1
     fi
 
-    echo "Script updated." >&2
+    # Print version transition
+    if [ -n "$NEW_VERSION" ] && [ "$NEW_VERSION" != "$CLAUDIUS_VERSION" ]; then
+        echo "claudius updated: $CLAUDIUS_VERSION → $NEW_VERSION" >&2
+    elif [ -n "$NEW_VERSION" ]; then
+        echo "claudius is already up to date ($CLAUDIUS_VERSION)." >&2
+    else
+        echo "Script updated." >&2
+    fi
 
     # Pull the latest Docker image
     echo "Pulling $IMAGE..." >&2
