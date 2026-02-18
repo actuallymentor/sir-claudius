@@ -126,6 +126,13 @@ if [ "${1:-}" = "update" ]; then
     # Extract the version from the downloaded script
     NEW_VERSION=$(grep -m1 '^CLAUDIUS_VERSION=' "$TEMP_FILE" | cut -d'"' -f2)
 
+    # If the version is identical, no need to update
+    if [ -n "$NEW_VERSION" ] && [ "$NEW_VERSION" = "$CLAUDIUS_VERSION" ]; then
+        rm -f "$TEMP_FILE"
+        echo "claudius $CLAUDIUS_VERSION — no need to update." >&2
+        exit 0
+    fi
+
     # Replace the current script, using sudo if needed
     # Check the parent directory (not the file) since mv needs directory write permission
     if [ -w "$(dirname "$SCRIPT_PATH")" ]; then
@@ -141,10 +148,8 @@ if [ "${1:-}" = "update" ]; then
     fi
 
     # Print version transition
-    if [ -n "$NEW_VERSION" ] && [ "$NEW_VERSION" != "$CLAUDIUS_VERSION" ]; then
+    if [ -n "$NEW_VERSION" ]; then
         echo "claudius updated: $CLAUDIUS_VERSION → $NEW_VERSION" >&2
-    elif [ -n "$NEW_VERSION" ]; then
-        echo "claudius is already up to date ($CLAUDIUS_VERSION)." >&2
     else
         echo "Script updated." >&2
     fi
