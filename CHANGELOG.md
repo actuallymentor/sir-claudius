@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.4.1] - 2026-02-18
+
+### Fixed
+- history search now searches full session transcripts, not just the first prompt
+- history search highlight was not rendering ANSI color codes correctly
+
 ## [0.4.0] - 2026-02-18
 
 ### Added

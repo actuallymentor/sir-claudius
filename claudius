@@ -5,7 +5,7 @@ set -e
 # claudius — run Claude Code inside a Docker container
 # -----------------------------------------------------------
 
-CLAUDIUS_VERSION="0.4.0"
+CLAUDIUS_VERSION="0.4.1"
 REPO_URL="https://raw.githubusercontent.com/actuallymentor/sir-claudius/main/claudius"
 
 IMAGE="${CLAUDE_SANDBOX_IMAGE:-actuallymentor/sir-claudius:latest}"
@@ -539,9 +539,50 @@ if not sessions:
 # Sort by latest timestamp, most recent first
 sorted_sessions = sorted(sessions.values(), key=lambda s: s['latest_ts'], reverse=True)
 
-# Filter by search query (case-insensitive substring match on the first prompt)
+# Filter by search query — search first prompt and full transcript text
 if search_query:
-    sorted_sessions = [s for s in sorted_sessions if search_query in s['first_prompt'].lower()]
+    claude_dir = os.path.expanduser('~/.claude')
+
+    def session_matches(s):
+        # Quick match on first prompt
+        if search_query in s['first_prompt'].lower():
+            return True
+        # Deep search through the full session transcript
+        project = s.get('project', '')
+        if not project:
+            return False
+        encoded_project = project.replace('/', '-')
+        transcript = os.path.join(claude_dir, 'projects', encoded_project, f'{s["sessionId"]}.jsonl')
+        if not os.path.isfile(transcript):
+            return False
+        try:
+            with open(transcript) as tf:
+                for tl in tf:
+                    tl = tl.strip()
+                    if not tl:
+                        continue
+                    # Fast pre-check on raw line before parsing JSON
+                    if search_query not in tl.lower():
+                        continue
+                    try:
+                        rec = json.loads(tl)
+                    except json.JSONDecodeError:
+                        continue
+                    msg = rec.get('message', {})
+                    content = msg.get('content', '')
+                    if isinstance(content, str) and search_query in content.lower():
+                        return True
+                    elif isinstance(content, list):
+                        for block in content:
+                            if isinstance(block, dict):
+                                text = block.get('text', '')
+                                if text and search_query in text.lower():
+                                    return True
+        except (IOError, OSError):
+            pass
+        return False
+
+    sorted_sessions = [s for s in sorted_sessions if session_matches(s)]
     if not sorted_sessions:
         print(f'No sessions matching \"{sys.argv[4]}\" found.', file=sys.stderr)
         sys.exit(0)
@@ -586,7 +627,7 @@ for entry, resume_cmd in zip(sorted_sessions, resume_cmds):
     if search_query:
         summary = re.sub(
             f'({re.escape(search_query)})',
-            r'\033[1;33m\1\033[0m',
+            '\033[1;33m\\1\033[0m',
             summary,
             flags=re.IGNORECASE
         )

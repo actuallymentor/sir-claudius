@@ -41,7 +41,7 @@ claudius rebuild
 claudius history              # shows 15 most recent
 claudius history 50           # shows 50 most recent
 claudius history all          # shows all sessions
-claudius history "npm issue"  # search sessions by description
+claudius history "npm issue"  # search sessions (prompts + full transcript)
 
 # Skip all permission prompts (--dangerously-skip-permissions)
 claudius yolo
