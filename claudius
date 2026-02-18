@@ -58,15 +58,16 @@ Environment variables:
   CLAUDE_MODEL           Model to use (default: claude-opus-4-6)
   CLAUDE_CODE_OAUTH_TOKEN  OAuth token (skips credential lookup)
   ANTHROPIC_API_KEY      API key (fallback if no OAuth token)
-  CLAUDIUS_NPM_ISOLATE   Set to 0 to disable node_modules isolation (default: 1)
+  CLAUDIUS_NPM_ISOLATE   Set to 1 to always isolate, 0 to never isolate (default: auto-detect)
   CLAUDIUS_DIR           Override the claudius cache directory (default: ~/.claudius)
 
 node_modules isolation:
-  By default, claudius overlays a Docker volume on /workspace/node_modules
-  so platform-native binaries (macOS vs Linux) don't conflict between host
+  When a Node.js project is detected (package.json, node_modules/, or .nvmrc),
+  claudius asks whether to isolate node_modules via a Docker volume so
+  platform-native binaries (macOS vs Linux) don't conflict between host
   and container. Each project gets a persistent volume (claudius-nm-<hash>).
   Run \`npm install\` inside the container on first use.
-  Disable with: CLAUDIUS_NPM_ISOLATE=0
+  Force on/off with: CLAUDIUS_NPM_ISOLATE=1 or CLAUDIUS_NPM_ISOLATE=0
 
 All other arguments are passed through to Claude Code inside the container.
 EOF
@@ -429,15 +430,40 @@ fi
 # binaries (macOS vs Linux) don't conflict between host and container.
 # Named volumes stay inside Docker storage — nothing leaks to the host.
 # Each project gets its own persistent volume keyed by a path hash.
-# Disable with CLAUDIUS_NPM_ISOLATE=0.
+# CLAUDIUS_NPM_ISOLATE=1 forces on, =0 forces off, unset = auto-detect + prompt.
 NM_PREEXISTED=true
-if [ "$SANDBOX" = false ] && [ "$MUDBOX" = false ] && [ "${CLAUDIUS_NPM_ISOLATE:-1}" != "0" ]; then
-    PROJECT_HASH=$(printf '%s' "$(pwd)" | (shasum -a 256 2>/dev/null || sha256sum) | cut -c1-16)
-    docker_flags+=( -v "claudius-nm-${PROJECT_HASH}:/workspace/node_modules" )
-    # Tell the entrypoint to fix ownership on the isolated volume
-    docker_flags+=( -e "CLAUDIUS_NM_ISOLATED=1" )
-    # Track whether Docker will create the mount point directory on the host
-    [ -d "$(pwd)/node_modules" ] || NM_PREEXISTED=false
+if [ "$SANDBOX" = false ] && [ "$MUDBOX" = false ]; then
+
+    NM_ISOLATE="${CLAUDIUS_NPM_ISOLATE:-}"
+
+    # Auto-detect: check if this looks like a Node.js project
+    if [ -z "$NM_ISOLATE" ]; then
+        if [ -f "$(pwd)/package.json" ] || [ -d "$(pwd)/node_modules" ] || [ -f "$(pwd)/.nvmrc" ]; then
+            if [ -t 0 ]; then
+                printf 'Node.js project detected. Isolate node_modules in the container? [Y/n] ' >&2
+                read -r nm_confirm
+                case "$nm_confirm" in
+                    [nN]) NM_ISOLATE=0 ;;
+                    *)    NM_ISOLATE=1 ;;
+                esac
+            else
+                # Non-interactive: default to isolating
+                NM_ISOLATE=1
+            fi
+        else
+            NM_ISOLATE=0
+        fi
+    fi
+
+    if [ "$NM_ISOLATE" != "0" ]; then
+        PROJECT_HASH=$(printf '%s' "$(pwd)" | (shasum -a 256 2>/dev/null || sha256sum) | cut -c1-16)
+        docker_flags+=( -v "claudius-nm-${PROJECT_HASH}:/workspace/node_modules" )
+        # Tell the entrypoint to fix ownership on the isolated volume
+        docker_flags+=( -e "CLAUDIUS_NM_ISOLATED=1" )
+        # Track whether Docker will create the mount point directory on the host
+        [ -d "$(pwd)/node_modules" ] || NM_PREEXISTED=false
+    fi
+
 fi
 
 # Mount host config so Claude skips onboarding and reads user settings
