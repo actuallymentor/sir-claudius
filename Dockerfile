@@ -1,23 +1,23 @@
-FROM --platform=linux/arm64 node:24-alpine
+FROM --platform=linux/arm64 node:24-slim
 
 ARG CLAUDE_CODE_VERSION=""
 
 # System dependencies for Claude Code and MCP servers
-RUN apk add --no-cache \
+RUN apt-get update && apt-get install -y --no-install-recommends \
         git curl openssh-client jq \
-        python3 py3-pip \
+        python3 python3-pip \
         bash \
         bat \
-        build-base \
+        build-essential \
         bzip2 \
         ca-certificates \
-        bind-tools \
+        dnsutils \
         entr \
-        fd \
+        fd-find \
         file \
         gnupg \
         htop \
-        iputils \
+        iputils-ping \
         iproute2 \
         less \
         lsof \
@@ -28,15 +28,20 @@ RUN apk add --no-cache \
         ripgrep \
         rsync \
         shellcheck \
-        sqlite \
+        sqlite3 \
         sudo \
         strace \
         tree \
         unzip \
         wget \
-        xz \
+        xz-utils \
         zip \
-        zstd
+        zstd \
+    && rm -rf /var/lib/apt/lists/*
+
+# Symlink fd and bat to their expected names (Debian uses fd-find and batcat)
+RUN ln -sf /usr/bin/batcat /usr/local/bin/bat \
+    && ln -sf /usr/bin/fdfind /usr/local/bin/fd
 
 # Let the node user install global npm packages without sudo.
 # The base node image sets the prefix to /usr/local (root-owned), which
@@ -50,7 +55,12 @@ ENV PATH="/home/node/.npm-global/bin:$PATH"
 RUN pip3 install --break-system-packages uv
 
 # GitHub CLI
-RUN apk add --no-cache github-cli
+RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+        -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+        > /etc/apt/sources.list.d/github-cli.list \
+    && apt-get update && apt-get install -y --no-install-recommends gh \
+    && rm -rf /var/lib/apt/lists/*
 
 # Binary tools from GitHub releases (arch-aware)
 RUN ARCH=$(uname -m) \

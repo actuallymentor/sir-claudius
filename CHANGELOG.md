@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.7] - 2026-02-18
+
+### Changed
+- switch Docker base image from Alpine to Debian slim (node:24-slim)
+- add symlinks for fd and bat (Debian ships fd-find and batcat)
+- install GitHub CLI via apt repository instead of Alpine package
+
 ## [0.4.2] - 2026-02-18
 
 ### Fixed
