@@ -5,7 +5,7 @@ set -e
 # claudius — run Claude Code inside a Docker container
 # -----------------------------------------------------------
 
-CLAUDIUS_VERSION="0.4.7"
+CLAUDIUS_VERSION="0.5.0"
 REPO_URL="https://raw.githubusercontent.com/actuallymentor/sir-claudius/main/claudius"
 
 IMAGE="${CLAUDE_SANDBOX_IMAGE:-actuallymentor/sir-claudius:latest}"
@@ -61,6 +61,7 @@ Environment variables:
   CLAUDE_MODEL           Model to use (default: claude-opus-4-6)
   CLAUDE_CODE_OAUTH_TOKEN  OAuth token (skips credential lookup)
   ANTHROPIC_API_KEY      API key (fallback if no OAuth token)
+  CLAUDIUS_NPM_ISOLATE   Set to 1 to always isolate, 0 to never isolate (default: auto-detect)
   CLAUDIUS_DIR           Override the claudius cache directory (default: ~/.claudius)
 
 All other arguments are passed through to Claude Code inside the container.
@@ -760,6 +761,63 @@ elif [ "$SANDBOX" = false ]; then
     docker_flags+=( -v "$(pwd):/workspace" )
 fi
 
+# ---- node_modules isolation ----
+# When a macOS host bind-mounts a project into the Linux container, npm install
+# writes platform-specific native binaries. Isolating node_modules into a Docker
+# volume prevents the container from clobbering the host's node_modules (and vice versa).
+NM_ISOLATE=false
+NM_PREEXISTED=true
+
+if [ "$SANDBOX" = false ] && [ "$MUDBOX" = false ]; then
+
+    if [ "${CLAUDIUS_NPM_ISOLATE:-}" = "1" ]; then
+        NM_ISOLATE=true
+    elif [ "${CLAUDIUS_NPM_ISOLATE:-}" = "0" ]; then
+        NM_ISOLATE=false
+    else
+        # Auto-detect Node.js project
+        node_signals=( "package.json" "node_modules" ".nvmrc" "package-lock.json" "yarn.lock" "pnpm-lock.yaml" )
+        node_detected=false
+        for signal in "${node_signals[@]}"; do
+            if [ -e "$signal" ]; then
+                node_detected=true
+                break
+            fi
+        done
+
+        if [ "$node_detected" = true ]; then
+            if [ -t 0 ]; then
+                printf 'Node.js project detected. Isolate node_modules in the container? [Y/n] ' >&2
+                read -r nm_answer
+                case "$nm_answer" in
+                    [nN]) NM_ISOLATE=false ;;
+                    *)    NM_ISOLATE=true ;;
+                esac
+            else
+                # Non-interactive: default to isolating
+                NM_ISOLATE=true
+            fi
+        fi
+    fi
+
+    if [ "$NM_ISOLATE" = true ]; then
+        # Track whether node_modules existed before we run (Docker creates a ghost dir for the mount)
+        [ ! -d "node_modules" ] && NM_PREEXISTED=false
+
+        # Generate a stable hash from the workspace path for the volume name
+        workspace_path="$(pwd -P)"
+        if command -v shasum > /dev/null 2>&1; then
+            nm_hash=$(printf '%s' "$workspace_path" | shasum -a 256 | cut -c1-12)
+        else
+            nm_hash=$(printf '%s' "$workspace_path" | sha256sum | cut -c1-12)
+        fi
+
+        docker_flags+=( -v "claudius-nm-${nm_hash}:/workspace/node_modules" )
+        docker_flags+=( -e "CLAUDIUS_NM_ISOLATED=1" )
+    fi
+
+fi
+
 # Mount host config so Claude skips onboarding and reads user settings
 # Always create a writable copy so Claude can persist workspace trust and session state
 CLAUDE_JSON_TMPFILE=$(mktemp)
@@ -967,6 +1025,12 @@ cleanup() {
     [ -n "$CLAUDE_JSON_TMPFILE" ] && rm -f "$CLAUDE_JSON_TMPFILE"
     [ -n "$SETTINGS_TMPFILE" ] && rm -f "$SETTINGS_TMPFILE"
     [ -n "$CREDS_TMPFILE" ] && rm -f "$CREDS_TMPFILE"
+
+    # Remove the ghost node_modules directory Docker creates for the volume mount
+    # Only if it didn't exist before we started and is now empty
+    if [ "$NM_PREEXISTED" = false ] && [ -d "node_modules" ]; then
+        rmdir "node_modules" 2>/dev/null || true
+    fi
 }
 trap cleanup EXIT
 

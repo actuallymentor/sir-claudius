@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.0] - 2026-02-18
+
+### Added
+- re-add node_modules isolation with interactive prompt
+- auto-detect Node.js projects via package.json, node_modules, .nvmrc, package-lock.json, yarn.lock, pnpm-lock.yaml
+- `CLAUDIUS_NPM_ISOLATE` env var to force isolation on (1) or off (0)
+- entrypoint chown for Docker volume UID mismatch on isolated node_modules
+
 ## [0.4.7] - 2026-02-18
 
 ### Changed

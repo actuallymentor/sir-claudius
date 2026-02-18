@@ -157,7 +157,7 @@ Claudius resolves credentials in this order:
 
 When running on a macOS host, `npm install` inside the Linux container downloads platform-specific native binaries that differ from the host's. Without isolation, these Linux binaries end up in the host's `node_modules` (via the bind mount), breaking your local macOS setup — and vice versa.
 
-When claudius detects a Node.js project (by checking for `package.json`, `node_modules/`, or `.nvmrc`), it asks whether to isolate:
+When claudius detects a Node.js project (by checking for `package.json`, `node_modules/`, `.nvmrc`, `package-lock.json`, `yarn.lock`, or `pnpm-lock.yaml`), it asks whether to isolate:
 
 ```
 Node.js project detected. Isolate node_modules in the container? [Y/n]
