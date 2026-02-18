@@ -552,7 +552,8 @@ if search_query:
         if not project:
             return False
         encoded_project = project.replace('/', '-')
-        transcript = os.path.join(claude_dir, 'projects', encoded_project, f'{s["sessionId"]}.jsonl')
+        sid = s['sessionId']
+        transcript = os.path.join(claude_dir, 'projects', encoded_project, f'{sid}.jsonl')
         if not os.path.isfile(transcript):
             return False
         try:
