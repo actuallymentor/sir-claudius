@@ -1,23 +1,23 @@
-FROM --platform=linux/arm64 node:24-slim
+FROM --platform=linux/arm64 node:24-alpine
 
 ARG CLAUDE_CODE_VERSION=""
 
 # System dependencies for Claude Code and MCP servers
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
+RUN apk add --no-cache \
         git curl openssh-client jq \
-        python3 python3-pip python3-venv \
+        python3 py3-pip \
+        bash \
         bat \
-        build-essential \
+        build-base \
         bzip2 \
         ca-certificates \
-        dnsutils \
+        bind-tools \
         entr \
-        fd-find \
+        fd \
         file \
         gnupg \
         htop \
-        iputils-ping \
+        iputils \
         iproute2 \
         less \
         lsof \
@@ -28,18 +28,15 @@ RUN apt-get update \
         ripgrep \
         rsync \
         shellcheck \
-        sqlite3 \
+        sqlite \
         sudo \
         strace \
         tree \
         unzip \
         wget \
-        xz-utils \
+        xz \
         zip \
-        zstd \
-    && ln -s /usr/bin/batcat /usr/local/bin/bat \
-    && ln -s /usr/bin/fdfind /usr/local/bin/fd \
-    && rm -rf /var/lib/apt/lists/*
+        zstd
 
 # Let the node user install global npm packages without sudo.
 # The base node image sets the prefix to /usr/local (root-owned), which
@@ -53,19 +50,13 @@ ENV PATH="/home/node/.npm-global/bin:$PATH"
 RUN pip3 install --break-system-packages uv
 
 # GitHub CLI
-RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
-        -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
-    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
-        > /etc/apt/sources.list.d/github-cli.list \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends gh \
-    && rm -rf /var/lib/apt/lists/*
+RUN apk add --no-cache github-cli
 
 # Binary tools from GitHub releases (arch-aware)
-RUN ARCH=$(dpkg --print-architecture) \
+RUN ARCH=$(uname -m) \
     && case "$ARCH" in \
-        amd64) YQ_ARCH="amd64"; SCC_ARCH="x86_64" ;; \
-        arm64) YQ_ARCH="arm64"; SCC_ARCH="arm64" ;; \
+        x86_64) YQ_ARCH="amd64"; SCC_ARCH="x86_64" ;; \
+        aarch64) YQ_ARCH="arm64"; SCC_ARCH="arm64" ;; \
         *) echo "Unsupported arch: $ARCH" && exit 1 ;; \
     esac \
     # yq — YAML/JSON/XML processor
