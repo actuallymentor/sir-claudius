@@ -472,17 +472,12 @@ print(f'{hr}')
     MODIFIERS_FILE="$CLAUDIUS_DIR/session_modifiers"
 
     if command -v python3 > /dev/null 2>&1; then
-        _ESC=$'\033'
-        _YELLOW="${_ESC}[1;33m" _RESET="${_ESC}[0m" python3 -c "
-import json, sys, os, re, shutil
+        python3 -c "
+import json, sys, os, shutil
 from datetime import datetime, timezone
 
 # Detect terminal width for dynamic truncation
 term_width = shutil.get_terminal_size( ( 120, 24 ) ).columns
-
-# ANSI helpers — passed from bash to avoid escape-layer issues
-YELLOW = os.environ.get('_YELLOW', '')
-RESET = os.environ.get('_RESET', '')
 
 history_file = sys.argv[1]
 limit = int(sys.argv[2]) if len(sys.argv) > 2 else 15
@@ -628,15 +623,6 @@ for entry, resume_cmd in zip(sorted_sessions, resume_cmds):
     max_summary = term_width - len(prefix)
     if max_summary > 3 and len(summary) > max_summary:
         summary = summary[:max_summary - 3] + '...'
-
-    # Highlight search matches after truncation to avoid splitting ANSI codes
-    if search_query:
-        summary = re.sub(
-            f'({re.escape(search_query)})',
-            lambda m: YELLOW + m.group(1) + RESET,
-            summary,
-            flags=re.IGNORECASE
-        )
 
     print(f'{prefix}{summary}')
 " "$HISTORY_FILE" "$HISTORY_LIMIT" "$MODIFIERS_FILE" "$HISTORY_SEARCH"
