@@ -5,7 +5,7 @@ set -e
 # claudius — run Claude Code inside a Docker container
 # -----------------------------------------------------------
 
-CLAUDIUS_VERSION="0.4.1"
+CLAUDIUS_VERSION="0.4.2"
 REPO_URL="https://raw.githubusercontent.com/actuallymentor/sir-claudius/main/claudius"
 
 IMAGE="${CLAUDE_SANDBOX_IMAGE:-actuallymentor/sir-claudius:latest}"
@@ -126,39 +126,48 @@ if [ "${1:-}" = "update" ]; then
     # Extract the version from the downloaded script
     NEW_VERSION=$(grep -m1 '^CLAUDIUS_VERSION=' "$TEMP_FILE" | cut -d'"' -f2)
 
-    # If the version is identical, no need to update
+    # If the version is identical, skip the script update
     if [ -n "$NEW_VERSION" ] && [ "$NEW_VERSION" = "$CLAUDIUS_VERSION" ]; then
         rm -f "$TEMP_FILE"
-        echo "claudius $CLAUDIUS_VERSION — no need to update." >&2
-        exit 0
-    fi
-
-    # Replace the current script, using sudo if needed
-    # Check the parent directory (not the file) since mv needs directory write permission
-    if [ -w "$(dirname "$SCRIPT_PATH")" ]; then
-        mv "$TEMP_FILE" "$SCRIPT_PATH"
-        chmod +x "$SCRIPT_PATH"
-    elif command -v sudo > /dev/null 2>&1; then
-        echo "Writing to $SCRIPT_PATH requires elevated permissions..." >&2
-        sudo mv "$TEMP_FILE" "$SCRIPT_PATH"
-        sudo chmod +x "$SCRIPT_PATH"
+        echo "claudius is already up to date ($CLAUDIUS_VERSION)." >&2
     else
-        echo "Error: cannot write to $SCRIPT_PATH and sudo is not available" >&2
-        exit 1
+        # Replace the current script, using sudo if needed
+        # Check the parent directory (not the file) since mv needs directory write permission
+        if [ -w "$(dirname "$SCRIPT_PATH")" ]; then
+            mv "$TEMP_FILE" "$SCRIPT_PATH"
+            chmod +x "$SCRIPT_PATH"
+        elif command -v sudo > /dev/null 2>&1; then
+            echo "Writing to $SCRIPT_PATH requires elevated permissions..." >&2
+            sudo mv "$TEMP_FILE" "$SCRIPT_PATH"
+            sudo chmod +x "$SCRIPT_PATH"
+        else
+            echo "Error: cannot write to $SCRIPT_PATH and sudo is not available" >&2
+            exit 1
+        fi
+
+        # Print version transition
+        if [ -n "$NEW_VERSION" ]; then
+            echo "claudius updated: $CLAUDIUS_VERSION → $NEW_VERSION" >&2
+        else
+            echo "Script updated." >&2
+        fi
     fi
 
-    # Print version transition
-    if [ -n "$NEW_VERSION" ]; then
-        echo "claudius updated: $CLAUDIUS_VERSION → $NEW_VERSION" >&2
-    else
-        echo "Script updated." >&2
-    fi
-
-    # Pull the latest Docker image
+    # Pull the latest Docker image — capture output to filter noise when up to date
     echo "Pulling $IMAGE..." >&2
-    if docker pull "$IMAGE"; then
-        echo "Image $IMAGE updated." >&2
+    PULL_OUTPUT=$(docker pull "$IMAGE" 2>&1)
+    PULL_EXIT=$?
+
+    if [ $PULL_EXIT -eq 0 ]; then
+        if echo "$PULL_OUTPUT" | grep -q "Image is up to date"; then
+            # Already current — show only the status line
+            echo "$PULL_OUTPUT" | grep "^Status:" >&2
+        else
+            # New image pulled — show the full output
+            echo "$PULL_OUTPUT" >&2
+        fi
     else
+        echo "$PULL_OUTPUT" >&2
         echo "Warning: image pull failed (you may need to rebuild locally)" >&2
     fi
 

@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.2] - 2026-02-18
+
+### Fixed
+- `claudius update` now always pulls the docker image, even when the script version is already current
+
+### Changed
+- `claudius update` only shows the "Status: Image is up to date" line when no image update is available; shows full pull output when downloading a new image
+
 ## [0.4.1] - 2026-02-18
 
 ### Fixed
