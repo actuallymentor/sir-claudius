@@ -8,6 +8,7 @@ on:
     branches: [main]
     paths:
       - "Dockerfile"
+      - "entrypoint.sh"
       - ".github/workflows/publish.yml"
   workflow_dispatch:
 
