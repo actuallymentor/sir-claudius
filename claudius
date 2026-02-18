@@ -61,16 +61,7 @@ Environment variables:
   CLAUDE_MODEL           Model to use (default: claude-opus-4-6)
   CLAUDE_CODE_OAUTH_TOKEN  OAuth token (skips credential lookup)
   ANTHROPIC_API_KEY      API key (fallback if no OAuth token)
-  CLAUDIUS_NPM_ISOLATE   Set to 1 to always isolate, 0 to never isolate (default: auto-detect)
   CLAUDIUS_DIR           Override the claudius cache directory (default: ~/.claudius)
-
-node_modules isolation:
-  When a Node.js project is detected and the host CPU architecture differs
-  from the container's (e.g. amd64 host → arm64 container), claudius asks
-  whether to isolate node_modules via a Docker volume so platform-native
-  binaries don't conflict. Each project gets a persistent volume
-  (claudius-nm-<hash>). Run \`npm install\` inside the container on first use.
-  Force on/off with: CLAUDIUS_NPM_ISOLATE=1 or CLAUDIUS_NPM_ISOLATE=0
 
 All other arguments are passed through to Claude Code inside the container.
 EOF
@@ -769,63 +760,6 @@ elif [ "$SANDBOX" = false ]; then
     docker_flags+=( -v "$(pwd):/workspace" )
 fi
 
-# ---- node_modules isolation ----
-# When the host and container CPU architectures differ, overlay a named Docker
-# volume on /workspace/node_modules so platform-native binaries don't conflict.
-# Named volumes stay inside Docker storage — nothing leaks to the host.
-# Each project gets its own persistent volume keyed by a path hash.
-# CLAUDIUS_NPM_ISOLATE=1 forces on, =0 forces off, unset = auto-detect.
-NM_PREEXISTED=true
-if [ "$SANDBOX" = false ] && [ "$MUDBOX" = false ]; then
-
-    NM_ISOLATE="${CLAUDIUS_NPM_ISOLATE:-}"
-
-    # Auto-detect: only isolate when host and container CPU architectures differ,
-    # since native binaries compiled for one arch won't run on the other.
-    if [ -z "$NM_ISOLATE" ]; then
-        if [ -f "$(pwd)/package.json" ] || [ -d "$(pwd)/node_modules" ] || [ -f "$(pwd)/.nvmrc" ]; then
-
-            # Normalise host arch to Docker naming (aarch64→arm64, x86_64→amd64)
-            HOST_ARCH=$(uname -m)
-            case "$HOST_ARCH" in
-                aarch64) HOST_ARCH="arm64" ;;
-                x86_64)  HOST_ARCH="amd64" ;;
-            esac
-
-            CONTAINER_ARCH=$(docker image inspect --format '{{.Architecture}}' "$IMAGE" 2>/dev/null || echo "")
-
-            if [ -n "$CONTAINER_ARCH" ] && [ "$HOST_ARCH" != "$CONTAINER_ARCH" ]; then
-                if [ -t 0 ]; then
-                    printf 'Architecture mismatch (host: %s, container: %s). Isolate node_modules? [Y/n] ' "$HOST_ARCH" "$CONTAINER_ARCH" >&2
-                    read -r nm_confirm
-                    case "$nm_confirm" in
-                        [nN]) NM_ISOLATE=0 ;;
-                        *)    NM_ISOLATE=1 ;;
-                    esac
-                else
-                    # Non-interactive: default to isolating on arch mismatch
-                    NM_ISOLATE=1
-                fi
-            else
-                NM_ISOLATE=0
-            fi
-
-        else
-            NM_ISOLATE=0
-        fi
-    fi
-
-    if [ "$NM_ISOLATE" != "0" ]; then
-        PROJECT_HASH=$(printf '%s' "$(pwd)" | (shasum -a 256 2>/dev/null || sha256sum) | cut -c1-16)
-        docker_flags+=( -v "claudius-nm-${PROJECT_HASH}:/workspace/node_modules" )
-        # Tell the entrypoint to fix ownership on the isolated volume
-        docker_flags+=( -e "CLAUDIUS_NM_ISOLATED=1" )
-        # Track whether Docker will create the mount point directory on the host
-        [ -d "$(pwd)/node_modules" ] || NM_PREEXISTED=false
-    fi
-
-fi
-
 # Mount host config so Claude skips onboarding and reads user settings
 # Always create a writable copy so Claude can persist workspace trust and session state
 CLAUDE_JSON_TMPFILE=$(mktemp)
@@ -1033,13 +967,6 @@ cleanup() {
     [ -n "$CLAUDE_JSON_TMPFILE" ] && rm -f "$CLAUDE_JSON_TMPFILE"
     [ -n "$SETTINGS_TMPFILE" ] && rm -f "$SETTINGS_TMPFILE"
     [ -n "$CREDS_TMPFILE" ] && rm -f "$CREDS_TMPFILE"
-    # Docker creates an empty node_modules/ on the host as a mount point for the
-    # overlay volume. Remove it on exit so it doesn't litter the host workspace.
-    if [ "$NM_PREEXISTED" = false ] && [ -d "$(pwd)/node_modules" ]; then
-        if [ -z "$(ls -A "$(pwd)/node_modules" 2>/dev/null)" ]; then
-            rmdir "$(pwd)/node_modules" 2>/dev/null || true
-        fi
-    fi
 }
 trap cleanup EXIT
 
