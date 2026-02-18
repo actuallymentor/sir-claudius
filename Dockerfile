@@ -1,4 +1,4 @@
-FROM node:24-slim
+FROM --platform=linux/arm64 node:24-slim
 
 ARG CLAUDE_CODE_VERSION=""
 
