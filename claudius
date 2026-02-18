@@ -472,16 +472,17 @@ print(f'{hr}')
     MODIFIERS_FILE="$CLAUDIUS_DIR/session_modifiers"
 
     if command -v python3 > /dev/null 2>&1; then
-        python3 -c "
+        _ESC=$'\033'
+        _YELLOW="${_ESC}[1;33m" _RESET="${_ESC}[0m" python3 -c "
 import json, sys, os, re, shutil
 from datetime import datetime, timezone
 
 # Detect terminal width for dynamic truncation
 term_width = shutil.get_terminal_size( ( 120, 24 ) ).columns
 
-# ANSI helpers
-YELLOW = chr(27) + '[1;33m'
-RESET = chr(27) + '[0m'
+# ANSI helpers — passed from bash to avoid escape-layer issues
+YELLOW = os.environ.get('_YELLOW', '')
+RESET = os.environ.get('_RESET', '')
 
 history_file = sys.argv[1]
 limit = int(sys.argv[2]) if len(sys.argv) > 2 else 15
