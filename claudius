@@ -65,11 +65,11 @@ Environment variables:
   CLAUDIUS_DIR           Override the claudius cache directory (default: ~/.claudius)
 
 node_modules isolation:
-  When a Node.js project is detected (package.json, node_modules/, or .nvmrc),
-  claudius asks whether to isolate node_modules via a Docker volume so
-  platform-native binaries (macOS vs Linux) don't conflict between host
-  and container. Each project gets a persistent volume (claudius-nm-<hash>).
-  Run \`npm install\` inside the container on first use.
+  When a Node.js project is detected and the host CPU architecture differs
+  from the container's (e.g. amd64 host → arm64 container), claudius asks
+  whether to isolate node_modules via a Docker volume so platform-native
+  binaries don't conflict. Each project gets a persistent volume
+  (claudius-nm-<hash>). Run \`npm install\` inside the container on first use.
   Force on/off with: CLAUDIUS_NPM_ISOLATE=1 or CLAUDIUS_NPM_ISOLATE=0
 
 All other arguments are passed through to Claude Code inside the container.
@@ -770,30 +770,46 @@ elif [ "$SANDBOX" = false ]; then
 fi
 
 # ---- node_modules isolation ----
-# Overlay a named Docker volume on /workspace/node_modules so platform-native
-# binaries (macOS vs Linux) don't conflict between host and container.
+# When the host and container CPU architectures differ, overlay a named Docker
+# volume on /workspace/node_modules so platform-native binaries don't conflict.
 # Named volumes stay inside Docker storage — nothing leaks to the host.
 # Each project gets its own persistent volume keyed by a path hash.
-# CLAUDIUS_NPM_ISOLATE=1 forces on, =0 forces off, unset = auto-detect + prompt.
+# CLAUDIUS_NPM_ISOLATE=1 forces on, =0 forces off, unset = auto-detect.
 NM_PREEXISTED=true
 if [ "$SANDBOX" = false ] && [ "$MUDBOX" = false ]; then
 
     NM_ISOLATE="${CLAUDIUS_NPM_ISOLATE:-}"
 
-    # Auto-detect: check if this looks like a Node.js project
+    # Auto-detect: only isolate when host and container CPU architectures differ,
+    # since native binaries compiled for one arch won't run on the other.
     if [ -z "$NM_ISOLATE" ]; then
         if [ -f "$(pwd)/package.json" ] || [ -d "$(pwd)/node_modules" ] || [ -f "$(pwd)/.nvmrc" ]; then
-            if [ -t 0 ]; then
-                printf 'Node.js project detected. Isolate node_modules in the container? [Y/n] ' >&2
-                read -r nm_confirm
-                case "$nm_confirm" in
-                    [nN]) NM_ISOLATE=0 ;;
-                    *)    NM_ISOLATE=1 ;;
-                esac
+
+            # Normalise host arch to Docker naming (aarch64→arm64, x86_64→amd64)
+            HOST_ARCH=$(uname -m)
+            case "$HOST_ARCH" in
+                aarch64) HOST_ARCH="arm64" ;;
+                x86_64)  HOST_ARCH="amd64" ;;
+            esac
+
+            CONTAINER_ARCH=$(docker image inspect --format '{{.Architecture}}' "$IMAGE" 2>/dev/null || echo "")
+
+            if [ -n "$CONTAINER_ARCH" ] && [ "$HOST_ARCH" != "$CONTAINER_ARCH" ]; then
+                if [ -t 0 ]; then
+                    printf 'Architecture mismatch (host: %s, container: %s). Isolate node_modules? [Y/n] ' "$HOST_ARCH" "$CONTAINER_ARCH" >&2
+                    read -r nm_confirm
+                    case "$nm_confirm" in
+                        [nN]) NM_ISOLATE=0 ;;
+                        *)    NM_ISOLATE=1 ;;
+                    esac
+                else
+                    # Non-interactive: default to isolating on arch mismatch
+                    NM_ISOLATE=1
+                fi
             else
-                # Non-interactive: default to isolating
-                NM_ISOLATE=1
+                NM_ISOLATE=0
             fi
+
         else
             NM_ISOLATE=0
         fi
