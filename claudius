@@ -5,7 +5,7 @@ set -e
 # claudius — run Claude Code inside a Docker container
 # -----------------------------------------------------------
 
-CLAUDIUS_VERSION="0.4.3"
+CLAUDIUS_VERSION="0.4.4"
 REPO_URL="https://raw.githubusercontent.com/actuallymentor/sir-claudius/main/claudius"
 
 IMAGE="${CLAUDE_SANDBOX_IMAGE:-actuallymentor/sir-claudius:latest}"
@@ -153,21 +153,9 @@ if [ "${1:-}" = "update" ]; then
         fi
     fi
 
-    # Pull the latest Docker image — capture output to filter noise when up to date
+    # Pull the latest Docker image
     echo "Pulling $IMAGE..." >&2
-    PULL_OUTPUT=$(docker pull "$IMAGE" 2>&1)
-    PULL_EXIT=$?
-
-    if [ $PULL_EXIT -eq 0 ]; then
-        if echo "$PULL_OUTPUT" | grep -q "Image is up to date"; then
-            # Already current — show only the status line
-            echo "$PULL_OUTPUT" | grep "^Status:" >&2
-        else
-            # New image pulled — show the full output
-            echo "$PULL_OUTPUT" >&2
-        fi
-    else
-        echo "$PULL_OUTPUT" >&2
+    if ! docker pull "$IMAGE" >&2; then
         echo "Warning: image pull failed (you may need to rebuild locally)" >&2
     fi
 
