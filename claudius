@@ -214,7 +214,7 @@ if [ "${1:-}" = "history" ]; then
 
     if command -v python3 > /dev/null 2>&1; then
         python3 -c "
-import json, sys, os, shutil
+import json, sys, os, re, shutil
 from datetime import datetime, timezone
 
 # Detect terminal width for dynamic truncation
@@ -291,9 +291,19 @@ if search_query:
 if limit > 0:
     sorted_sessions = sorted_sessions[:limit]
 
+# Build all resume commands first to find the longest one
+resume_cmds = []
 for entry in sorted_sessions:
-    ts = entry['latest_ts']
     sid = entry['sessionId']
+    mods = session_modifiers.get(sid, '')
+    mod_prefix = f' {mods}' if mods else ''
+    resume_cmds.append(f'claudius{mod_prefix} resume {sid}')
+
+# Pad all resume commands to the same width
+max_cmd_len = max(len(cmd) for cmd in resume_cmds) if resume_cmds else 0
+
+for entry, resume_cmd in zip(sorted_sessions, resume_cmds):
+    ts = entry['latest_ts']
 
     # Convert epoch ms to HH:MM DD-MM-YYYY
     try:
@@ -302,17 +312,25 @@ for entry in sorted_sessions:
     except (ValueError, OSError):
         ts_str = '??:?? ??-??-????'
 
-    # Build resume command with saved modifiers
-    mods = session_modifiers.get(sid, '')
-    mod_prefix = f' {mods}' if mods else ''
-    resume_cmd = f'claudius{mod_prefix} resume {sid}'
+    # Pad the resume command so all rows align
+    padded_cmd = resume_cmd.ljust(max_cmd_len)
+
+    summary = entry['first_prompt'].replace('\n', ' ').strip()
 
     # Truncate prompt to fill the remaining terminal width
-    summary = entry['first_prompt'].replace('\n', ' ').strip()
-    prefix = f'{ts_str} | {resume_cmd} | '
+    prefix = f'{ts_str} | {padded_cmd} | '
     max_summary = term_width - len(prefix)
     if max_summary > 3 and len(summary) > max_summary:
         summary = summary[:max_summary - 3] + '...'
+
+    # Highlight search matches after truncation to avoid splitting ANSI codes
+    if search_query:
+        summary = re.sub(
+            f'({re.escape(search_query)})',
+            r'\033[1;33m\1\033[0m',
+            summary,
+            flags=re.IGNORECASE
+        )
 
     print(f'{prefix}{summary}')
 " "$HISTORY_FILE" "$HISTORY_LIMIT" "$MODIFIERS_FILE" "$HISTORY_SEARCH"
