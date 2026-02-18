@@ -430,9 +430,12 @@ fi
 # Named volumes stay inside Docker storage — nothing leaks to the host.
 # Each project gets its own persistent volume keyed by a path hash.
 # Disable with CLAUDIUS_NPM_ISOLATE=0.
+NM_PREEXISTED=true
 if [ "$SANDBOX" = false ] && [ "$MUDBOX" = false ] && [ "${CLAUDIUS_NPM_ISOLATE:-1}" != "0" ]; then
     PROJECT_HASH=$(printf '%s' "$(pwd)" | (shasum -a 256 2>/dev/null || sha256sum) | cut -c1-16)
     docker_flags+=( -v "claudius-nm-${PROJECT_HASH}:/workspace/node_modules" )
+    # Track whether Docker will create the mount point directory on the host
+    [ -d "$(pwd)/node_modules" ] || NM_PREEXISTED=false
 fi
 
 # Mount host config so Claude skips onboarding and reads user settings
@@ -642,6 +645,13 @@ cleanup() {
     [ -n "$CLAUDE_JSON_TMPFILE" ] && rm -f "$CLAUDE_JSON_TMPFILE"
     [ -n "$SETTINGS_TMPFILE" ] && rm -f "$SETTINGS_TMPFILE"
     [ -n "$CREDS_TMPFILE" ] && rm -f "$CREDS_TMPFILE"
+    # Docker creates an empty node_modules/ on the host as a mount point for the
+    # overlay volume. Remove it on exit so it doesn't litter the host workspace.
+    if [ "$NM_PREEXISTED" = false ] && [ -d "$(pwd)/node_modules" ]; then
+        if [ -z "$(ls -A "$(pwd)/node_modules" 2>/dev/null)" ]; then
+            rmdir "$(pwd)/node_modules" 2>/dev/null || true
+        fi
+    fi
 }
 trap cleanup EXIT
 
