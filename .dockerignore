@@ -1,3 +1,4 @@
 *
 !Dockerfile
 !CONTAINER_AGENTS.md
+!entrypoint.sh

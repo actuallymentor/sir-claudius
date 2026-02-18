@@ -434,6 +434,8 @@ NM_PREEXISTED=true
 if [ "$SANDBOX" = false ] && [ "$MUDBOX" = false ] && [ "${CLAUDIUS_NPM_ISOLATE:-1}" != "0" ]; then
     PROJECT_HASH=$(printf '%s' "$(pwd)" | (shasum -a 256 2>/dev/null || sha256sum) | cut -c1-16)
     docker_flags+=( -v "claudius-nm-${PROJECT_HASH}:/workspace/node_modules" )
+    # Tell the entrypoint to fix ownership on the isolated volume
+    docker_flags+=( -e "CLAUDIUS_NM_ISOLATED=1" )
     # Track whether Docker will create the mount point directory on the host
     [ -d "$(pwd)/node_modules" ] || NM_PREEXISTED=false
 fi
@@ -664,7 +666,7 @@ if [ -f "$HISTORY_FILE" ]; then
     history_lines_before=$(wc -l < "$HISTORY_FILE")
 fi
 
-docker run "${docker_flags[@]}" "$IMAGE" "${claude_flags[@]}" "$@"
+docker run "${docker_flags[@]}" "$IMAGE" claude "${claude_flags[@]}" "$@"
 exit_code=$?
 
 # Show claudius resume hint if a session was active

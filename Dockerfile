@@ -105,6 +105,9 @@ RUN if [ -n "$CLAUDE_CODE_VERSION" ]; then \
 RUN claude --version
 
 COPY --chown=node:node CONTAINER_AGENTS.md /home/node/AGENTS.md
+COPY --chown=node:node entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
 
 WORKDIR /workspace
-ENTRYPOINT ["claude"]
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+CMD ["claude"]
