@@ -37,6 +37,7 @@ Standalone commands:
   update      Fetch the latest script and pull the Docker image
   rebuild     Force-rebuild the Docker image with --no-cache
   history     List previous sessions (default: 15, or pass a number / "all" / "search text")
+  history inspect <id>  Show the full log and details of a session
 
 Options:
   --help, -h      Show this help message
@@ -53,6 +54,7 @@ Examples:
   claudius history 50             Show the 50 most recent sessions
   claudius history all            Show all sessions
   claudius history "npm issue"    Search sessions by description (case-insensitive)
+  claudius history inspect <id>   Inspect a session's full conversation log
 
 Environment variables:
   CLAUDE_SANDBOX_IMAGE   Docker image to use (default: actuallymentor/sir-claudius:latest)
@@ -189,6 +191,263 @@ if [ "${1:-}" = "history" ]; then
 
     if [ ! -f "$HISTORY_FILE" ] || [ ! -s "$HISTORY_FILE" ]; then
         echo "No sessions found." >&2
+        exit 0
+    fi
+
+    # ---- history inspect <session_id>: show full session details ----
+    if [ "${2:-}" = "inspect" ]; then
+
+        SESSION_ID="${3:-}"
+        if [ -z "$SESSION_ID" ]; then
+            echo "Usage: claudius history inspect <session_id>" >&2
+            exit 1
+        fi
+
+        CLAUDIUS_DIR="${CLAUDIUS_DIR:-$HOME/.claudius}"
+        MODIFIERS_FILE="$CLAUDIUS_DIR/session_modifiers"
+
+        if ! command -v python3 > /dev/null 2>&1; then
+            echo "Error: python3 is required for the history command" >&2
+            exit 1
+        fi
+
+        python3 -c "
+import json, sys, os, shutil
+from datetime import datetime, timezone, timedelta
+
+# ANSI helpers
+BOLD = '\033[1m'
+DIM = '\033[2m'
+YELLOW = '\033[1;33m'
+CYAN = '\033[36m'
+GREEN = '\033[32m'
+MAGENTA = '\033[35m'
+RESET = '\033[0m'
+
+term_width = shutil.get_terminal_size( ( 120, 24 ) ).columns
+
+history_file = sys.argv[1]
+session_id = sys.argv[2]
+modifiers_file = sys.argv[3] if len(sys.argv) > 3 else ''
+
+# --- Resolve session metadata from history.jsonl ---
+session_meta = None
+all_prompts = []
+with open(history_file) as f:
+    for line in f:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        sid = entry.get('sessionId', '')
+        if sid != session_id:
+            continue
+        ts = entry.get('timestamp', 0)
+        prompt = entry.get('display', '').strip()
+        project = entry.get('project', '')
+        all_prompts.append({ 'ts': ts, 'prompt': prompt })
+        if session_meta is None:
+            session_meta = { 'sessionId': sid, 'project': project, 'first_ts': ts, 'latest_ts': ts, 'first_prompt': prompt }
+        else:
+            if ts < session_meta['first_ts']:
+                session_meta['first_ts'] = ts
+            if ts > session_meta['latest_ts']:
+                session_meta['latest_ts'] = ts
+            if not session_meta['first_prompt'] and prompt:
+                session_meta['first_prompt'] = prompt
+
+if not session_meta:
+    print(f'Session {session_id} not found.', file=sys.stderr)
+    sys.exit(1)
+
+# --- Load modifiers ---
+mods = ''
+if modifiers_file and os.path.isfile(modifiers_file):
+    with open(modifiers_file) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split('\t', 1)
+            if parts[0] == session_id:
+                mods = parts[1] if len(parts) > 1 else ''
+
+# --- Locate session transcript ---
+project = session_meta['project']
+encoded_project = project.replace('/', '-') if project else ''
+claude_dir = os.path.expanduser('~/.claude')
+transcript_path = os.path.join(claude_dir, 'projects', encoded_project, f'{session_id}.jsonl') if encoded_project else ''
+
+# --- Parse transcript if it exists ---
+messages = []
+tools_used = {}
+model = ''
+git_branch = ''
+cc_version = ''
+
+if transcript_path and os.path.isfile(transcript_path):
+    with open(transcript_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            rec_type = rec.get('type', '')
+            msg = rec.get('message', {})
+            ts = rec.get('timestamp', '')
+
+            # Pick up metadata from first records that have it
+            if not git_branch:
+                git_branch = rec.get('gitBranch', '')
+            if not cc_version:
+                cc_version = rec.get('version', '')
+
+            if rec_type == 'user' and msg.get('role') == 'user':
+                content = msg.get('content', '')
+                # User messages can be a string or a list of content blocks
+                if isinstance(content, str) and content.strip():
+                    messages.append({ 'role': 'user', 'text': content.strip(), 'ts': ts })
+                elif isinstance(content, list):
+                    # Check for tool_result blocks (skip those) vs text
+                    for block in content:
+                        if isinstance(block, dict) and block.get('type') == 'tool_result':
+                            continue
+                        if isinstance(block, dict) and block.get('type') == 'text':
+                            messages.append({ 'role': 'user', 'text': block['text'].strip(), 'ts': ts })
+
+            elif rec_type == 'assistant':
+                content = msg.get('content', '')
+                if not model:
+                    model = msg.get('model', '')
+                if isinstance(content, str) and content.strip():
+                    messages.append({ 'role': 'assistant', 'text': content.strip(), 'ts': ts })
+                elif isinstance(content, list):
+                    text_parts = []
+                    for block in content:
+                        if isinstance(block, dict):
+                            if block.get('type') == 'text' and block.get('text', '').strip():
+                                text_parts.append(block['text'].strip())
+                            elif block.get('type') == 'tool_use':
+                                name = block.get('name', 'unknown')
+                                tools_used[name] = tools_used.get(name, 0) + 1
+                    if text_parts:
+                        messages.append({ 'role': 'assistant', 'text': '\n'.join(text_parts), 'ts': ts })
+
+# --- Format timestamps ---
+def fmt_ts(epoch_ms):
+    try:
+        dt = datetime.fromtimestamp(epoch_ms / 1000, tz=timezone.utc).astimezone()
+        return dt.strftime('%H:%M %d-%m-%Y')
+    except (ValueError, OSError):
+        return '??:?? ??-??-????'
+
+def fmt_duration(start_ms, end_ms):
+    delta = timedelta(milliseconds=end_ms - start_ms)
+    total_secs = int(delta.total_seconds())
+    if total_secs < 60:
+        return f'{total_secs}s'
+    mins, secs = divmod(total_secs, 60)
+    if mins < 60:
+        return f'{mins}m {secs}s'
+    hours, mins = divmod(mins, 60)
+    return f'{hours}h {mins}m'
+
+# --- Print session overview ---
+hr = '─' * term_width
+
+print(f'{hr}')
+print(f'{BOLD}Session inspect{RESET}')
+print(f'{hr}')
+print()
+
+# Metadata block
+print(f'  {DIM}Session{RESET}    {session_id}')
+print(f'  {DIM}Project{RESET}    {project}')
+if git_branch:
+    print(f'  {DIM}Branch{RESET}     {git_branch}')
+if model:
+    print(f'  {DIM}Model{RESET}      {model}')
+if cc_version:
+    print(f'  {DIM}CC version{RESET} {cc_version}')
+if mods:
+    print(f'  {DIM}Modifiers{RESET}  {YELLOW}{mods}{RESET}')
+
+first_ts = fmt_ts(session_meta['first_ts'])
+latest_ts = fmt_ts(session_meta['latest_ts'])
+duration = fmt_duration(session_meta['first_ts'], session_meta['latest_ts'])
+print(f'  {DIM}Started{RESET}    {first_ts}')
+print(f'  {DIM}Latest{RESET}     {latest_ts}  {DIM}({duration}){RESET}')
+
+# Resume command
+mod_prefix = f' {mods}' if mods else ''
+print(f'  {DIM}Resume{RESET}     {GREEN}claudius{mod_prefix} resume {session_id}{RESET}')
+print()
+
+# Stats
+user_msgs = [m for m in messages if m['role'] == 'user']
+asst_msgs = [m for m in messages if m['role'] == 'assistant']
+print(f'  {DIM}Messages{RESET}   {len(user_msgs)} user, {len(asst_msgs)} assistant')
+
+if tools_used:
+    sorted_tools = sorted(tools_used.items(), key=lambda x: x[1], reverse=True)
+    tool_str = ', '.join(f'{name} ({count})' for name, count in sorted_tools[:8])
+    if len(sorted_tools) > 8:
+        tool_str += f', +{len(sorted_tools) - 8} more'
+    print(f'  {DIM}Tools{RESET}      {tool_str}')
+
+print()
+print(f'{hr}')
+print(f'{BOLD}Conversation log{RESET}')
+print(f'{hr}')
+
+if not messages:
+    if not transcript_path or not os.path.isfile(transcript_path):
+        print(f'\n  {DIM}No transcript found at expected path:{RESET}')
+        print(f'  {DIM}{transcript_path or \"(unknown project path)\"}{RESET}')
+        # Show what we know from history.jsonl
+        if all_prompts:
+            print(f'\n  {DIM}Prompts from history (partial):{RESET}\n')
+            for p in all_prompts:
+                if p['prompt']:
+                    print(f'  {CYAN}You:{RESET} {p[\"prompt\"]}')
+    else:
+        print(f'\n  {DIM}No conversation messages found in transcript.{RESET}')
+    print()
+else:
+    print()
+    for msg in messages:
+        if msg['role'] == 'user':
+            # Show user messages in full
+            label = f'  {CYAN}You:{RESET} '
+            text = msg['text'].replace('\n', f'\n       ')
+            print(f'{label}{text}')
+            print()
+        else:
+            # Show assistant messages, indent continuation lines
+            label = f'  {MAGENTA}Claude:{RESET} '
+            text = msg['text']
+            # Wrap long lines to terminal width
+            indent = '          '
+            lines = text.split('\n')
+            first = True
+            for line in lines:
+                if first:
+                    print(f'{label}{line}')
+                    first = False
+                else:
+                    print(f'{indent}{line}')
+            print()
+
+print(f'{hr}')
+" "$HISTORY_FILE" "$SESSION_ID" "$MODIFIERS_FILE"
+
         exit 0
     fi
 

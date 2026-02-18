@@ -4,6 +4,7 @@
 
 ### Added
 - search history sessions by description with `claudius history "search text"` (case-insensitive)
+- `claudius history inspect <id>` to view full session details: metadata, tool usage stats, and conversation log
 
 ### Changed
 - history session descriptions now use full terminal width instead of a fixed 60-character truncation
