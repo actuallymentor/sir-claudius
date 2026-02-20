@@ -5,12 +5,13 @@ set -e
 # claudius — run Claude Code inside a Docker container
 # -----------------------------------------------------------
 
-CLAUDIUS_VERSION="0.5.0"
+CLAUDIUS_VERSION="0.6.0"
 REPO_URL="https://raw.githubusercontent.com/actuallymentor/sir-claudius/main/claudius"
 
 IMAGE="${CLAUDE_SANDBOX_IMAGE:-actuallymentor/sir-claudius:latest}"
 MODEL="${CLAUDE_MODEL:-claude-opus-4-6}"
 TOKEN_FILE="$HOME/.claude-sandbox-token"
+CONTAINER_HOME="/home/node"
 
 # ---- --version flag ----
 if [ "${1:-}" = "--version" ] || [ "${1:-}" = "-v" ]; then
@@ -845,7 +846,7 @@ elif command -v jq > /dev/null 2>&1; then
         && mv "$CLAUDE_JSON_TMPFILE.tmp" "$CLAUDE_JSON_TMPFILE" 2>/dev/null || true
 fi
 
-docker_flags+=( -v "$CLAUDE_JSON_TMPFILE:/home/node/.claude.json" )
+docker_flags+=( -v "$CLAUDE_JSON_TMPFILE:$CONTAINER_HOME/.claude.json" )
 # In yolo mode, create a writable copy of settings.json with the bypass
 # confirmation pre-accepted so Claude Code skips the "Bypass Permissions" dialog
 SETTINGS_TMPFILE=""
@@ -869,7 +870,7 @@ with open(sys.argv[1], 'w') as f:
 " "$SETTINGS_TMPFILE" 2>/dev/null || true
     fi
 
-    docker_flags+=( -v "$SETTINGS_TMPFILE:/home/node/.claude/settings.json" )
+    docker_flags+=( -v "$SETTINGS_TMPFILE:$CONTAINER_HOME/.claude/settings.json" )
 fi
 
 for config_file in settings.json settings.local.json CLAUDE.md; do
@@ -878,42 +879,47 @@ for config_file in settings.json settings.local.json CLAUDE.md; do
         continue
     fi
     if [ -f "$HOME/.claude/$config_file" ]; then
-        docker_flags+=( -v "$HOME/.claude/$config_file:/home/node/.claude/$config_file:ro" )
+        docker_flags+=( -v "$HOME/.claude/$config_file:$CONTAINER_HOME/.claude/$config_file:ro" )
     fi
 done
 
 # Mount skills directory if it exists
 if [ -d "$HOME/.claude/skills" ]; then
-    docker_flags+=( -v "$HOME/.claude/skills:/home/node/.claude/skills:ro" )
+    docker_flags+=( -v "$HOME/.claude/skills:$CONTAINER_HOME/.claude/skills:ro" )
+fi
+
+# Mount agent preferences directory if it exists
+if [ -d "$HOME/.agents" ]; then
+    docker_flags+=( -v "$HOME/.agents:$CONTAINER_HOME/.agents:ro" )
 fi
 
 # Persistent named volumes for MCP server package caches
 # These survive --rm so MCP servers don't re-download every run
-docker_flags+=( -v "claudius-npm-cache:/home/node/.npm" )
-docker_flags+=( -v "claudius-npm-global:/home/node/.npm-global" )
-docker_flags+=( -v "claudius-uv-cache:/home/node/.cache" )
+docker_flags+=( -v "claudius-npm-cache:$CONTAINER_HOME/.npm" )
+docker_flags+=( -v "claudius-npm-global:$CONTAINER_HOME/.npm-global" )
+docker_flags+=( -v "claudius-uv-cache:$CONTAINER_HOME/.cache" )
 
 # Share Claude session state with host so --continue and --resume find
 # sessions created on the host or in previous container runs
 HOST_CLAUDE_DIR="$HOME/.claude"
 mkdir -p "$HOST_CLAUDE_DIR/projects" "$HOST_CLAUDE_DIR/plans" "$HOST_CLAUDE_DIR/todos"
 if [ "$SANDBOX" = true ]; then
-    docker_flags+=( -v "$HOST_CLAUDE_DIR/projects:/home/node/.claude/projects:ro" )
-    docker_flags+=( -v "$HOST_CLAUDE_DIR/plans:/home/node/.claude/plans:ro" )
-    docker_flags+=( -v "$HOST_CLAUDE_DIR/todos:/home/node/.claude/todos:ro" )
+    docker_flags+=( -v "$HOST_CLAUDE_DIR/projects:$CONTAINER_HOME/.claude/projects:ro" )
+    docker_flags+=( -v "$HOST_CLAUDE_DIR/plans:$CONTAINER_HOME/.claude/plans:ro" )
+    docker_flags+=( -v "$HOST_CLAUDE_DIR/todos:$CONTAINER_HOME/.claude/todos:ro" )
 else
-    docker_flags+=( -v "$HOST_CLAUDE_DIR/projects:/home/node/.claude/projects" )
-    docker_flags+=( -v "$HOST_CLAUDE_DIR/plans:/home/node/.claude/plans" )
-    docker_flags+=( -v "$HOST_CLAUDE_DIR/todos:/home/node/.claude/todos" )
+    docker_flags+=( -v "$HOST_CLAUDE_DIR/projects:$CONTAINER_HOME/.claude/projects" )
+    docker_flags+=( -v "$HOST_CLAUDE_DIR/plans:$CONTAINER_HOME/.claude/plans" )
+    docker_flags+=( -v "$HOST_CLAUDE_DIR/todos:$CONTAINER_HOME/.claude/todos" )
 fi
 
 # Persist session history so the interactive picker shows previous sessions
 # touch is safe on existing files (preserves content) and bootstraps the file for new users
 touch "$HOST_CLAUDE_DIR/history.jsonl"
 if [ "$SANDBOX" = true ]; then
-    docker_flags+=( -v "$HOST_CLAUDE_DIR/history.jsonl:/home/node/.claude/history.jsonl:ro" )
+    docker_flags+=( -v "$HOST_CLAUDE_DIR/history.jsonl:$CONTAINER_HOME/.claude/history.jsonl:ro" )
 else
-    docker_flags+=( -v "$HOST_CLAUDE_DIR/history.jsonl:/home/node/.claude/history.jsonl" )
+    docker_flags+=( -v "$HOST_CLAUDE_DIR/history.jsonl:$CONTAINER_HOME/.claude/history.jsonl" )
 fi
 
 # Loosen seccomp so MCP servers that spawn child processes (browsers,
@@ -924,7 +930,7 @@ docker_flags+=( --security-opt "seccomp=unconfined" )
 # Pass authentication — prefer mounting credentials file (supports refresh)
 # over a static token env var (expires and can't be renewed)
 if [ -n "$CREDS_TMPFILE" ]; then
-    docker_flags+=( -v "$CREDS_TMPFILE:/home/node/.claude/.credentials.json" )
+    docker_flags+=( -v "$CREDS_TMPFILE:$CONTAINER_HOME/.claude/.credentials.json" )
 elif [ -n "$OAUTH_TOKEN" ]; then
     docker_flags+=( -e "CLAUDE_CODE_OAUTH_TOKEN=$OAUTH_TOKEN" )
 fi
@@ -939,20 +945,20 @@ docker_flags+=( -e "CLAUDE_MODEL=$MODEL" )
 # Expose the run mode inside the container for scripts and agents to check
 # Priority: yolo > mudbox > sandbox > regular
 if [ "$YOLO" = true ]; then
-    docker_flags+=( -e "CLAUDIUS_MODE=yolo" )
+    docker_flags+=( -e "AGENT_AUTONOMY_MODE=yolo" )
 elif [ "$MUDBOX" = true ]; then
-    docker_flags+=( -e "CLAUDIUS_MODE=mudbox" )
+    docker_flags+=( -e "AGENT_AUTONOMY_MODE=mudbox" )
 elif [ "$SANDBOX" = true ]; then
-    docker_flags+=( -e "CLAUDIUS_MODE=sandbox" )
+    docker_flags+=( -e "AGENT_AUTONOMY_MODE=sandbox" )
 else
-    docker_flags+=( -e "CLAUDIUS_MODE=regular" )
+    docker_flags+=( -e "AGENT_AUTONOMY_MODE=regular" )
 fi
 
 # Build Claude CLI flags
 claude_flags=( --model "$MODEL" )
 
 # Base system prompt: orient Claude to the container environment
-SYSTEM_PROMPT="You are running inside a Claudius Docker container — an isolated sandbox built for coding agents. You have passwordless sudo for any operation that needs root. Your workspace is /workspace (bind-mounted from the host). For a full reference of installed CLI tools and capabilities, read /home/node/AGENTS.md.
+SYSTEM_PROMPT="You are running inside a Claudius Docker container — an isolated sandbox built for coding agents. You have passwordless sudo for any operation that needs root. Your workspace is /workspace (bind-mounted from the host). For a full reference of installed CLI tools and capabilities, read ~/AGENTS.md.
 
 Do NOT add Co-Authored-By lines to git commit messages. The git author identity is already configured via environment variables."
 
@@ -960,14 +966,14 @@ Do NOT add Co-Authored-By lines to git commit messages. The git author identity 
 if [ "$SANDBOX" = true ]; then
     SYSTEM_PROMPT="$SYSTEM_PROMPT
 
-You are running in SANDBOX mode (CLAUDIUS_MODE=sandbox). There is no workspace mounted — the /workspace directory is empty and container-local. All host files are mounted read-only. You cannot modify anything on the host. Use this session for general questions, research, brainstorming, or tasks that don't need access to a project."
+You are running in SANDBOX mode (AGENT_AUTONOMY_MODE=sandbox). There is no workspace mounted — the /workspace directory is empty and container-local. All host files are mounted read-only. You cannot modify anything on the host. Use this session for general questions, research, brainstorming, or tasks that don't need access to a project."
 fi
 
 # In mudbox mode, tell Claude the workspace is read-only
 if [ "$MUDBOX" = true ]; then
     SYSTEM_PROMPT="$SYSTEM_PROMPT
 
-You are running in MUDBOX mode (CLAUDIUS_MODE=mudbox). The workspace at /workspace is mounted READ-ONLY from the host. You can read and explore all project files but cannot modify them. Use this mode for code review, analysis, exploration, or generating patches. Any files you need to create must go in a container-local directory outside /workspace."
+You are running in MUDBOX mode (AGENT_AUTONOMY_MODE=mudbox). The workspace at /workspace is mounted READ-ONLY from the host. You can read and explore all project files but cannot modify them. Use this mode for code review, analysis, exploration, or generating patches. Any files you need to create must go in a container-local directory outside /workspace."
 fi
 
 # In yolo mode, extend the prompt with autonomy instructions
@@ -975,7 +981,7 @@ if [ "$YOLO" = true ]; then
     claude_flags+=( --dangerously-skip-permissions )
     SYSTEM_PROMPT="$SYSTEM_PROMPT
 
-You are running in YOLO mode (CLAUDIUS_MODE=yolo). The environment variable \$CLAUDIUS_MODE is set to 'yolo'. In this mode you are expected to act with maximum autonomy — fulfill the user's intent with as little interaction as possible. Do not ask for confirmation before taking actions. Prefer doing over asking. If a task is ambiguous, make a reasonable choice and proceed."
+You are running in YOLO mode (AGENT_AUTONOMY_MODE=yolo). The environment variable \$AGENT_AUTONOMY_MODE is set to 'yolo'. In this mode you are expected to act with maximum autonomy — fulfill the user's intent with as little interaction as possible. Do not ask for confirmation before taking actions. Prefer doing over asking. If a task is ambiguous, make a reasonable choice and proceed. Commit your work without confirmation."
 fi
 
 claude_flags+=( --append-system-prompt "$SYSTEM_PROMPT" )

@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.6.0] - 2026-02-20
+
+### Added
+- mount host `~/.agents` directory read-only into container
+
+### Changed
+- rename `CLAUDIUS_MODE` env var to `AGENT_AUTONOMY_MODE`
+- extract `/home/node` into `CONTAINER_HOME` variable
+
 ## [0.5.0] - 2026-02-18
 
 ### Added
