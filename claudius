@@ -122,7 +122,7 @@ if [ "${1:-}" = "update" ]; then
     # If the version is identical, skip the script update
     if [ -n "$NEW_VERSION" ] && [ "$NEW_VERSION" = "$CLAUDIUS_VERSION" ]; then
         rm -f "$TEMP_FILE"
-        echo "claudius is already up to date ($CLAUDIUS_VERSION)." >&2
+        echo "claudius ($CLAUDIUS_VERSION) is already up to date with remote ($NEW_VERSION)." >&2
     else
         # Replace the current script, using sudo if needed
         # Check the parent directory (not the file) since mv needs directory write permission
