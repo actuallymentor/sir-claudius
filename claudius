@@ -6,7 +6,7 @@ set -e
 # -----------------------------------------------------------
 
 CLAUDIUS_VERSION="0.6.0"
-REPO_URL="https://raw.githubusercontent.com/actuallymentor/sir-claudius/main/claudius"
+REPO_URL="https://raw.githubusercontent.com/actuallymentor/sir-claudius/main/claudius?cachebust=$(date +%s)"
 
 IMAGE="${CLAUDE_SANDBOX_IMAGE:-actuallymentor/sir-claudius:latest}"
 MODEL="${CLAUDE_MODEL:-claude-opus-4-6}"
