@@ -43,6 +43,7 @@ Standalone commands:
 Options:
   --help, -h      Show this help message
   --version, -v   Show the claudius version
+  --model, -m    Set the model (e.g. -- model claude-sonnet-4-6)
 
 Examples:
   claudius                        Interactive session in the current directory
@@ -68,6 +69,33 @@ Environment variables:
 All other arguments are passed through to Claude Code inside the container.
 EOF
     exit 0
+fi
+
+# ---- --model flag ----
+if [ "${1:-}" = "--model" ] || [ "${1:-}" = "-m" ]; then
+    shift
+    # If next arg is missing, a subcommand, or a flag — show picker
+    next="${1:-}"
+    if [ -z "$next" ] || [[ "$next" == -* ]] || [[ "$next" =~ ^(yolo|sandbox|mudbox|continue|resume|setup|update|rebuild|history)$ ]]; then
+        echo "No model specified. Choose one:"
+        echo ""
+        echo "  1) claude-opus-4-6      Most capable, highest cost"
+        echo "  2) claude-sonnet-4-6    Balanced performance and cost (recommended)"
+        echo "  3) claude-haiku-4-5     Fastest, lowest cost"
+        echo ""
+        printf "Enter choice [1-3]: "
+        read -r model_choice
+        case "$model_choice" in
+            1) MODEL="claude-opus-4-6" ;;
+            2) MODEL="claude-sonnet-4-6" ;;
+            3) MODEL="claude-haiku-4-5-20251001" ;;
+            *) echo "Invalid choice, defaulting to claude-sonnet-4-6" >&2
+               MODEL="claude-sonnet-4-6" ;;
+        esac
+    else
+        MODEL="$next"
+        shift
+    fi
 fi
 
 # ---- setup subcommand: obtain a long-lived OAuth token ----
