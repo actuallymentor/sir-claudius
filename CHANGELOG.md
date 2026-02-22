@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.6.1] - 2026-02-22
+
+### Added
+- pre-flight auth check before launching container — warns if host credentials are expired or invalid
+
 ## [0.6.0] - 2026-02-20
 
 ### Added
