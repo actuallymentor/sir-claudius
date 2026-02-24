@@ -926,10 +926,11 @@ if command -v gh > /dev/null 2>&1; then
     _gh_token=$(gh auth token 2>/dev/null || true)
     if [ -n "$_gh_token" ]; then
         docker_flags+=( -e "GH_TOKEN=$_gh_token" )
+    elif [ -d "$HOME/.config/gh" ]; then
+        # Fall back to mounting the config dir for setups that store tokens
+        # in plain text (gh auth login --with-token) rather than the keychain
+        docker_flags+=( -v "$HOME/.config/gh:$CONTAINER_HOME/.config/gh:ro" )
     fi
-fi
-if [ -d "$HOME/.config/gh" ]; then
-    docker_flags+=( -v "$HOME/.config/gh:$CONTAINER_HOME/.config/gh:ro" )
 fi
 
 # Persistent named volumes for MCP server package caches
