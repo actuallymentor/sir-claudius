@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.6.3] - 2026-02-24
+
+### Added
+- mount host `~/.config/gh` read-only into container for GitHub CLI auth
+
 ## [0.6.2] - 2026-02-24
 
 ### Fixed
