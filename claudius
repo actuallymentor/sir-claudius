@@ -917,7 +917,17 @@ if [ -d "$HOME/.agents" ]; then
     docker_flags+=( -v "$HOME/.agents:$CONTAINER_HOME/.agents:ro" )
 fi
 
-# Mount GitHub CLI config so `gh` auth is available inside the container
+# Pass GitHub CLI auth into the container
+# gh stores tokens in the system keychain (macOS) or credential manager, so
+# mounting ~/.config/gh alone isn't enough. Extract the token and pass it as
+# GH_TOKEN, which gh honours natively. Fall back to mounting the config dir
+# for setups that store tokens in plain text (gh auth login --with-token).
+if command -v gh > /dev/null 2>&1; then
+    _gh_token=$(gh auth token 2>/dev/null || true)
+    if [ -n "$_gh_token" ]; then
+        docker_flags+=( -e "GH_TOKEN=$_gh_token" )
+    fi
+fi
 if [ -d "$HOME/.config/gh" ]; then
     docker_flags+=( -v "$HOME/.config/gh:$CONTAINER_HOME/.config/gh:ro" )
 fi

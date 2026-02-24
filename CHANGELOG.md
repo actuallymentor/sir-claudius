@@ -3,7 +3,7 @@
 ## [0.6.3] - 2026-02-24
 
 ### Added
-- mount host `~/.config/gh` read-only into container for GitHub CLI auth
+- pass host `gh` CLI auth into container via `GH_TOKEN` env var, with `~/.config/gh` config mount as fallback
 
 ## [0.6.2] - 2026-02-24
 
