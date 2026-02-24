@@ -5,7 +5,7 @@ set -e
 # claudius — run Claude Code inside a Docker container
 # -----------------------------------------------------------
 
-CLAUDIUS_VERSION="0.6.1"
+CLAUDIUS_VERSION="0.6.2"
 REPO_URL="https://raw.githubusercontent.com/actuallymentor/sir-claudius/main/claudius?cachebust=$(date +%s)"
 
 IMAGE="${CLAUDE_SANDBOX_IMAGE:-actuallymentor/sir-claudius:latest}"
@@ -737,7 +737,7 @@ if [ -n "$CREDS_TMPFILE" ] && command -v claude > /dev/null 2>&1; then
             echo "$auth_output" >&2
             echo "" >&2
             echo "Please log in on the host:" >&2
-            echo "  claude login" >&2
+            echo '  claude "/login"' >&2
             exit 1
         fi
         # Non-auth error — warn but continue (might work inside the container)

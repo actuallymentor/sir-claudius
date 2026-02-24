@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.6.2] - 2026-02-24
+
+### Fixed
+- correct login command in auth failure message (`claude "/login"` not `claude login`)
+
 ## [0.6.1] - 2026-02-22
 
 ### Added
