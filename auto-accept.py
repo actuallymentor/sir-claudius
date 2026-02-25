@@ -14,9 +14,13 @@ import os
 import sys
 import pty
 import re
+import fcntl
 import select
 import signal
+import struct
+import termios
 import time
+import tty
 import errno
 
 
@@ -30,8 +34,15 @@ TRIGGER_PATTERNS = [
     "Would you like to proceed",
 ]
 
-# Compiled regex to strip ANSI escape sequences before matching
-ANSI_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]|\x1b\][^\x07]*\x07|\x1b\[[\?]?[0-9;]*[a-zA-Z]")
+# Compiled regex to strip ANSI escape sequences before matching.
+# Covers CSI sequences (with optional ? prefix), OSC sequences, and
+# other common terminal escapes like \x1b= / \x1b> (keypad mode).
+ANSI_RE = re.compile(
+    r"\x1b\[[\?]?[0-9;]*[a-zA-Z]"   # CSI: \e[...X  or \e[?...X
+    r"|\x1b\][^\x07]*\x07"           # OSC: \e]...\a
+    r"|\x1b[()][0-9A-Za-z]"          # charset: \e(B, \e)0, etc.
+    r"|\x1b[=>]"                     # keypad mode: \e= / \e>
+)
 
 # Seconds to wait after detecting a trigger before sending Enter.
 # Gives the TUI time to finish its redraw cycle.
@@ -53,10 +64,28 @@ def matches_trigger(text):
     return any(pattern in clean for pattern in TRIGGER_PATTERNS)
 
 
+def copy_terminal_size(from_fd, to_fd):
+    """Copy the terminal window size from one fd to another."""
+    try:
+        size = fcntl.ioctl(from_fd, termios.TIOCGWINSZ, b"\x00" * 8)
+        fcntl.ioctl(to_fd, termios.TIOCSWINSZ, size)
+    except OSError:
+        pass
+
+
 def main():
     if len(sys.argv) < 2:
         print(f"Usage: {sys.argv[0]} <command> [args...]", file=sys.stderr)
         sys.exit(1)
+
+    stdin_fd = sys.stdin.fileno()
+    stdout_fd = sys.stdout.fileno()
+    stdin_is_tty = os.isatty(stdin_fd)
+
+    # Save original terminal settings so we can restore on exit
+    old_termios = None
+    if stdin_is_tty:
+        old_termios = termios.tcgetattr(stdin_fd)
 
     # Fork a child process in a new PTY
     child_pid, master_fd = pty.fork()
@@ -69,10 +98,13 @@ def main():
 
     # ── Parent process: multiplex I/O and watch for triggers ──
 
-    last_accept_time = 0.0
+    # Sync the child PTY's window size with the real terminal
+    if stdin_is_tty:
+        copy_terminal_size(stdout_fd, master_fd)
 
-    # Forward SIGWINCH (terminal resize) to the child
+    # Forward SIGWINCH (terminal resize) to the child, and update PTY size
     def handle_winch(signum, frame):
+        copy_terminal_size(stdout_fd, master_fd)
         try:
             os.kill(child_pid, signal.SIGWINCH)
         except OSError:
@@ -80,25 +112,37 @@ def main():
 
     signal.signal(signal.SIGWINCH, handle_winch)
 
+    # Put the real terminal into raw mode so individual keystrokes
+    # pass through to the child without line-buffering or signal handling.
+    if stdin_is_tty:
+        tty.setraw(stdin_fd)
+
+    last_accept_time = 0.0
+
     # Buffer for accumulating output chunks for pattern matching.
     # We keep a sliding window so patterns split across read() calls
     # are still detected.
     output_buffer = ""
     BUFFER_MAX = 4096
 
+    # Build the list of fds to select on
+    read_fds = [master_fd]
+    if stdin_is_tty:
+        read_fds.append(stdin_fd)
+
     try:
         while True:
             try:
-                readable, _, _ = select.select([sys.stdin, master_fd], [], [], 0.1)
-            except (select.error, ValueError):
+                readable, _, _ = select.select(read_fds, [], [], 0.1)
+            except (select.error, ValueError, InterruptedError):
                 break
 
             for fd in readable:
 
                 # ── User input → child ──
-                if fd is sys.stdin:
+                if fd == stdin_fd:
                     try:
-                        data = os.read(sys.stdin.fileno(), 1024)
+                        data = os.read(stdin_fd, 1024)
                     except OSError:
                         data = b""
                     if not data:
@@ -109,7 +153,7 @@ def main():
                         pass
 
                 # ── Child output → user + pattern matching ──
-                elif fd is master_fd:
+                elif fd == master_fd:
                     try:
                         data = os.read(master_fd, 4096)
                     except OSError:
@@ -120,8 +164,7 @@ def main():
 
                     # Pass through to the real terminal immediately
                     try:
-                        os.write(sys.stdout.fileno(), data)
-                        sys.stdout.flush()
+                        os.write(stdout_fd, data)
                     except OSError:
                         pass
 
@@ -152,7 +195,7 @@ def main():
                                 chunk = os.read(master_fd, 4096)
                                 if not chunk:
                                     break
-                                os.write(sys.stdout.fileno(), chunk)
+                                os.write(stdout_fd, chunk)
                         except OSError:
                             pass
 
@@ -173,6 +216,11 @@ def main():
             os.kill(child_pid, signal.SIGINT)
         except OSError:
             pass
+    finally:
+        # Restore the real terminal to its original mode.
+        # Without this, the terminal stays in raw mode (no echo, no line editing).
+        if old_termios is not None:
+            termios.tcsetattr(stdin_fd, termios.TCSADRAIN, old_termios)
 
     # Wait for the child and propagate its exit code
     while True:
