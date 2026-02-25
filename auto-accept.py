@@ -44,9 +44,13 @@ ANSI_RE = re.compile(
     r"|\x1b[=>]"                     # keypad mode: \e= / \e>
 )
 
-# Seconds to wait after detecting a trigger before sending Enter.
+# Seconds to wait after detecting a trigger before starting the countdown.
 # Gives the TUI time to finish its redraw cycle.
 REDRAW_DELAY = 0.5
+
+# Seconds to count down before auto-accepting. Gives the user time to review
+# the plan. The countdown is shown in the terminal title bar (OSC 0).
+COUNTDOWN_SECONDS = 10
 
 # Minimum seconds between consecutive auto-accepts (debounce).
 # Prevents double-firing when the same prompt text appears in the redraw.
@@ -69,6 +73,29 @@ def copy_terminal_size(from_fd, to_fd):
     try:
         size = fcntl.ioctl(from_fd, termios.TIOCGWINSZ, b"\x00" * 8)
         fcntl.ioctl(to_fd, termios.TIOCSWINSZ, size)
+    except OSError:
+        pass
+
+
+def set_terminal_title(fd, title):
+    """Set the terminal title via OSC 0. Non-destructive to TUI content."""
+    try:
+        os.write(fd, f"\x1b]0;{title}\x07".encode())
+    except OSError:
+        pass
+
+
+def drain_child_output(master_fd, stdout_fd):
+    """Drain pending child output, forwarding to the real terminal."""
+    try:
+        while True:
+            r, _, _ = select.select([master_fd], [], [], 0.05)
+            if not r:
+                break
+            chunk = os.read(master_fd, 4096)
+            if not chunk:
+                break
+            os.write(stdout_fd, chunk)
     except OSError:
         pass
 
@@ -187,17 +214,39 @@ def main():
                         time.sleep(REDRAW_DELAY)
 
                         # Drain any output that arrived during the delay
-                        try:
-                            while True:
-                                r, _, _ = select.select([master_fd], [], [], 0.05)
-                                if not r:
-                                    break
-                                chunk = os.read(master_fd, 4096)
-                                if not chunk:
-                                    break
-                                os.write(stdout_fd, chunk)
-                        except OSError:
-                            pass
+                        drain_child_output(master_fd, stdout_fd)
+
+                        # Countdown with visual feedback in the terminal title bar.
+                        # The main I/O loop keeps running so the TUI stays responsive.
+                        for remaining in range(COUNTDOWN_SECONDS, 0, -1):
+                            set_terminal_title(stdout_fd, f"\u23f3 Auto-accepting plan in {remaining}s...")
+
+                            # Forward I/O for 1 second (non-blocking)
+                            deadline = time.monotonic() + 1.0
+                            while time.monotonic() < deadline:
+                                timeout = max(0, deadline - time.monotonic())
+                                try:
+                                    r, _, _ = select.select(read_fds, [], [], timeout)
+                                except (select.error, ValueError, InterruptedError):
+                                    r = []
+                                for ready_fd in r:
+                                    if ready_fd == stdin_fd:
+                                        try:
+                                            chunk = os.read(stdin_fd, 1024)
+                                            if chunk:
+                                                os.write(master_fd, chunk)
+                                        except OSError:
+                                            pass
+                                    elif ready_fd == master_fd:
+                                        try:
+                                            chunk = os.read(master_fd, 4096)
+                                            if chunk:
+                                                os.write(stdout_fd, chunk)
+                                        except OSError:
+                                            pass
+
+                        # Clear the countdown title
+                        set_terminal_title(stdout_fd, "")
 
                         # Send Enter to accept the default selection
                         try:

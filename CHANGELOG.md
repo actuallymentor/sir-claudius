@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.8.0] - 2026-02-25
+
+### Added
+- 10-second countdown before auto-accepting plan prompts, shown in terminal title bar
+- TUI stays responsive during countdown (I/O forwarding continues)
+
 ## [0.7.0] - 2026-02-25
 
 ### Added
