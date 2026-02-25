@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.8.1] - 2026-02-25
+
+### Fixed
+- ANSI stripping now replaces cursor-forward sequences with spaces, fixing silent pattern match failures
+
+### Changed
+- simplify auto-accept delay from I/O-forwarding countdown loop to plain 10s sleep
+- match actual TUI menu text ("Yes, and bypass permissions", "Yes, clear context") instead of prompt header
+
+### Removed
+- terminal title bar countdown (OSC 0) — not visible in practice
+
 ## [0.8.0] - 2026-02-25
 
 ### Added

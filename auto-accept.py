@@ -17,7 +17,6 @@ import re
 import fcntl
 import select
 import signal
-import struct
 import termios
 import time
 import tty
@@ -29,9 +28,9 @@ import errno
 # On match, we wait briefly for the TUI to redraw, then send Enter.
 
 TRIGGER_PATTERNS = [
-    "Claude Code needs your approval for the plan",
+    "Yes, and bypass permissions",
+    "Yes, clear context",
     "needs your approval",
-    "Would you like to proceed",
 ]
 
 # Compiled regex to strip ANSI escape sequences before matching.
@@ -44,13 +43,18 @@ ANSI_RE = re.compile(
     r"|\x1b[=>]"                     # keypad mode: \e= / \e>
 )
 
-# Seconds to wait after detecting a trigger before starting the countdown.
+# Cursor-forward sequences (\e[C, \e[1C, \e[nC) are used as visual
+# spaces in Claude Code's TUI. Replace these with a real space BEFORE
+# stripping other ANSI codes so word boundaries are preserved.
+CURSOR_FWD_RE = re.compile(r"\x1b\[\d*C")
+
+# Seconds to wait after detecting a trigger before sending Enter.
 # Gives the TUI time to finish its redraw cycle.
 REDRAW_DELAY = 0.5
 
-# Seconds to count down before auto-accepting. Gives the user time to review
-# the plan. The countdown is shown in the terminal title bar (OSC 0).
-COUNTDOWN_SECONDS = 10
+# Seconds to wait before auto-accepting. Gives the user time to review
+# the plan and intervene if needed.
+ACCEPT_DELAY = 10
 
 # Minimum seconds between consecutive auto-accepts (debounce).
 # Prevents double-firing when the same prompt text appears in the redraw.
@@ -59,6 +63,7 @@ DEBOUNCE_INTERVAL = 3.0
 
 def strip_ansi(text):
     """Remove ANSI escape codes from text for clean pattern matching."""
+    text = CURSOR_FWD_RE.sub(" ", text)   # cursor-forward → space
     return ANSI_RE.sub("", text)
 
 
@@ -73,14 +78,6 @@ def copy_terminal_size(from_fd, to_fd):
     try:
         size = fcntl.ioctl(from_fd, termios.TIOCGWINSZ, b"\x00" * 8)
         fcntl.ioctl(to_fd, termios.TIOCSWINSZ, size)
-    except OSError:
-        pass
-
-
-def set_terminal_title(fd, title):
-    """Set the terminal title via OSC 0. Non-destructive to TUI content."""
-    try:
-        os.write(fd, f"\x1b]0;{title}\x07".encode())
     except OSError:
         pass
 
@@ -212,41 +209,11 @@ def main():
 
                         # Wait for the TUI to finish redrawing
                         time.sleep(REDRAW_DELAY)
-
-                        # Drain any output that arrived during the delay
                         drain_child_output(master_fd, stdout_fd)
 
-                        # Countdown with visual feedback in the terminal title bar.
-                        # The main I/O loop keeps running so the TUI stays responsive.
-                        for remaining in range(COUNTDOWN_SECONDS, 0, -1):
-                            set_terminal_title(stdout_fd, f"\u23f3 Auto-accepting plan in {remaining}s...")
-
-                            # Forward I/O for 1 second (non-blocking)
-                            deadline = time.monotonic() + 1.0
-                            while time.monotonic() < deadline:
-                                timeout = max(0, deadline - time.monotonic())
-                                try:
-                                    r, _, _ = select.select(read_fds, [], [], timeout)
-                                except (select.error, ValueError, InterruptedError):
-                                    r = []
-                                for ready_fd in r:
-                                    if ready_fd == stdin_fd:
-                                        try:
-                                            chunk = os.read(stdin_fd, 1024)
-                                            if chunk:
-                                                os.write(master_fd, chunk)
-                                        except OSError:
-                                            pass
-                                    elif ready_fd == master_fd:
-                                        try:
-                                            chunk = os.read(master_fd, 4096)
-                                            if chunk:
-                                                os.write(stdout_fd, chunk)
-                                        except OSError:
-                                            pass
-
-                        # Clear the countdown title
-                        set_terminal_title(stdout_fd, "")
+                        # Pause before accepting — gives the user time to intervene
+                        time.sleep(ACCEPT_DELAY)
+                        drain_child_output(master_fd, stdout_fd)
 
                         # Send Enter to accept the default selection
                         try:
