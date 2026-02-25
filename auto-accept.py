@@ -15,12 +15,28 @@ import sys
 import pty
 import re
 import fcntl
+import logging
 import select
 import signal
 import termios
 import time
 import tty
 import errno
+
+# ─── Debug logging ───────────────────────────────────────────────────
+# Writes to /tmp/auto-accept.log so we can diagnose without breaking the TUI.
+# Set AUTO_ACCEPT_DEBUG=1 to enable.
+DEBUG = os.environ.get("AUTO_ACCEPT_DEBUG", "0") == "1"
+if DEBUG:
+    logging.basicConfig(
+        filename="/tmp/auto-accept.log",
+        level=logging.DEBUG,
+        format="%(asctime)s %(message)s",
+    )
+else:
+    logging.basicConfig(level=logging.CRITICAL)
+
+log = logging.getLogger("auto-accept")
 
 
 # ─── Trigger patterns ────────────────────────────────────────────────
@@ -102,9 +118,12 @@ def main():
         print(f"Usage: {sys.argv[0]} <command> [args...]", file=sys.stderr)
         sys.exit(1)
 
+    log.debug("auto-accept.py starting, argv=%s", sys.argv)
+
     stdin_fd = sys.stdin.fileno()
     stdout_fd = sys.stdout.fileno()
     stdin_is_tty = os.isatty(stdin_fd)
+    log.debug("stdin_is_tty=%s", stdin_is_tty)
 
     # Save original terminal settings so we can restore on exit
     old_termios = None
@@ -202,10 +221,17 @@ def main():
                     if len(output_buffer) > BUFFER_MAX:
                         output_buffer = output_buffer[-BUFFER_MAX:]
 
+                    # Log the stripped buffer periodically for debugging
+                    if DEBUG:
+                        clean = strip_ansi(output_buffer)
+                        # Only log the last 200 chars to keep it readable
+                        log.debug("buffer tail (stripped): %r", clean[-200:])
+
                     # Check triggers
                     now = time.monotonic()
                     if matches_trigger(output_buffer) and (now - last_accept_time) > DEBOUNCE_INTERVAL:
                         last_accept_time = now
+                        log.debug("TRIGGER MATCHED — waiting %.1fs redraw + %ds accept delay", REDRAW_DELAY, ACCEPT_DELAY)
 
                         # Wait for the TUI to finish redrawing
                         time.sleep(REDRAW_DELAY)
@@ -216,6 +242,7 @@ def main():
                         drain_child_output(master_fd, stdout_fd)
 
                         # Send Enter to accept the default selection
+                        log.debug("SENDING ENTER")
                         try:
                             os.write(master_fd, b"\r")
                         except OSError:
