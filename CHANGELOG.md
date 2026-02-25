@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.7.0] - 2026-02-25
+
+### Added
+- auto-accept plan mode approval prompts in YOLO mode via `auto-accept.py` PTY wrapper
+
 ## [0.6.5] - 2025-02-25
 
 ### Fixed
