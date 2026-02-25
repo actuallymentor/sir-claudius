@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.6.5] - 2025-02-25
+
+### Fixed
+- bust prompt cache on pre-flight auth check with dynamic timestamp (d3ace94)
+
 ## [0.6.4] - 2026-02-24
 
 ## [0.6.3] - 2026-02-24

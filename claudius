@@ -5,7 +5,7 @@ set -e
 # claudius — run Claude Code inside a Docker container
 # -----------------------------------------------------------
 
-CLAUDIUS_VERSION="0.6.4"
+CLAUDIUS_VERSION="0.6.5"
 REPO_URL="https://raw.githubusercontent.com/actuallymentor/sir-claudius/main/claudius?cachebust=$(date +%s)"
 
 IMAGE="${CLAUDE_SANDBOX_IMAGE:-actuallymentor/sir-claudius:latest}"
@@ -726,7 +726,7 @@ fi
 # Only runs when the host has `claude` installed and we're using mounted credentials
 if [ -n "$CREDS_TMPFILE" ] && command -v claude > /dev/null 2>&1; then
     printf 'Checking if you are logged in... ' >&2
-    if auth_output=$(claude -p "respond with ok" 2>&1); then
+    if auth_output=$(claude -p "The current time is $(date -u '+%Y-%m-%d %H:%M:%S UTC'). What do you think about that? Respond with just ok" 2>&1); then
         echo "ok" >&2
     else
         echo "failed" >&2
