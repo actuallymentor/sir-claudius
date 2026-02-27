@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.10.0] - 2026-02-27
+
+### Added
+- `worktree` command — isolated git worktree per session for parallel-safe operation
+- auto-merge on exit: fast-forward or merge commit, with conflict handling and push offer
+- `CLAUDIUS_WORKTREE`, `CLAUDIUS_WORKTREE_BRANCH`, `CLAUDIUS_WORKTREE_ORIGINAL_BRANCH` env vars inside container
+- system prompt tells Claude about the worktree branch and merge-back behavior
+
 ## [0.9.0] - 2026-02-27
 
 ### Added

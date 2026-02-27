@@ -5,7 +5,7 @@ set -e
 # claudius — run Claude Code inside a Docker container
 # -----------------------------------------------------------
 
-CLAUDIUS_VERSION="0.9.0"
+CLAUDIUS_VERSION="0.10.0"
 REPO_URL="https://raw.githubusercontent.com/actuallymentor/sir-claudius/main/claudius?cachebust=$(date +%s)"
 
 IMAGE="${CLAUDE_SANDBOX_IMAGE:-actuallymentor/sir-claudius:latest}"
@@ -30,6 +30,7 @@ Commands (chainable — combine in any order):
   yolo        Run with blanket permissions (--dangerously-skip-permissions)
   sandbox     Run without mounting a workspace; host files are read-only
   mudbox      Mount the workspace as read-only (explore code without modifying it)
+  worktree    Create an isolated git worktree (parallel sessions without conflicts)
   continue    Resume the most recent session (--continue)
   resume      Pick a session to resume, or pass a name (--resume)
 
@@ -48,6 +49,8 @@ Examples:
   claudius                        Interactive session in the current directory
   claudius yolo                   Skip all permission prompts
   claudius mudbox                 Read-only workspace (code review, exploration)
+  claudius worktree               Isolated worktree (parallel-safe)
+  claudius worktree yolo          Isolated worktree + skip permissions
   claudius yolo mudbox            Read-only workspace + skip permissions
   claudius sandbox yolo           No workspace + skip permissions
   claudius mudbox continue        Read-only workspace + resume last session
@@ -636,6 +639,7 @@ fi
 YOLO=false
 SANDBOX=false
 MUDBOX=false
+WORKTREE=false
 CONTINUE=false
 RESUME=false
 RESUME_NAME=""
@@ -645,13 +649,14 @@ while [ $# -gt 0 ]; do
         yolo)      YOLO=true; shift ;;
         sandbox)   SANDBOX=true; shift ;;
         mudbox)    MUDBOX=true; shift ;;
+        worktree)  WORKTREE=true; shift ;;
         continue)  CONTINUE=true; shift ;;
         resume)
             RESUME=true; shift
             # Next non-flag, non-subcommand argument is the session name
             if [ $# -gt 0 ] && [[ "${1:-}" != -* ]]; then
                 case "$1" in
-                    yolo|sandbox|mudbox|continue|resume) ;;
+                    yolo|sandbox|mudbox|worktree|continue|resume) ;;
                     *) RESUME_NAME="$1"; shift ;;
                 esac
             fi
@@ -659,6 +664,26 @@ while [ $# -gt 0 ]; do
         *)  break ;;
     esac
 done
+
+# ---- worktree incompatibility checks ----
+if [ "$WORKTREE" = true ]; then
+    if [ "$SANDBOX" = true ]; then
+        echo "Error: worktree and sandbox are incompatible — worktree needs a git repo to branch from." >&2
+        exit 1
+    fi
+    if [ "$MUDBOX" = true ]; then
+        echo "Error: worktree and mudbox are incompatible — worktree creates a writable branch." >&2
+        exit 1
+    fi
+    if [ "$CONTINUE" = true ]; then
+        echo "Error: worktree and continue are incompatible — each worktree is a fresh session." >&2
+        exit 1
+    fi
+    if [ "$RESUME" = true ]; then
+        echo "Error: worktree and resume are incompatible — each worktree is a fresh session." >&2
+        exit 1
+    fi
+fi
 
 # ---- check for updates (non-blocking, 5s timeout) ----
 check_for_update() {
@@ -771,7 +796,8 @@ if [ -z "$OAUTH_TOKEN" ] && [ "$HAS_HOST_CREDS" = true ]; then
 fi
 
 # ---- safety check: warn if mounting $HOME or / as workspace ----
-if [ "$SANDBOX" = false ]; then
+# Skip for worktree mode — the mount is always in $CLAUDIUS_DIR/worktrees/, not cwd
+if [ "$SANDBOX" = false ] && [ "$WORKTREE" = false ]; then
     RESOLVED_PWD="$(pwd -P)"
     RESOLVED_HOME="$(cd "$HOME" && pwd -P)"
 
@@ -794,6 +820,57 @@ if [ "$SANDBOX" = false ]; then
     fi
 fi
 
+# ---- worktree setup ----
+WORKTREE_ID=""
+WORKTREE_DIR=""
+WORKTREE_BRANCH=""
+WORKTREE_ORIGINAL_BRANCH=""
+WORKTREE_GIT_DIR=""
+WORKTREE_DOTGIT_TMPFILE=""
+WORKTREE_GITDIR_TMPFILE=""
+
+if [ "$WORKTREE" = true ]; then
+
+    # Must be in a git repo with a real .git directory (not a worktree or submodule)
+    if [ ! -d ".git" ]; then
+        if [ -f ".git" ]; then
+            echo "Error: current directory is already inside a git worktree or submodule." >&2
+        else
+            echo "Error: not a git repository. worktree mode requires a git repo." >&2
+        fi
+        exit 1
+    fi
+
+    # Capture the original branch name (merge target on exit)
+    WORKTREE_ORIGINAL_BRANCH=$(git symbolic-ref --short HEAD 2>/dev/null || git rev-parse --short HEAD)
+
+    # Resolve the repo's .git directory (absolute path)
+    WORKTREE_GIT_DIR="$(cd "$(git rev-parse --git-dir)" && pwd -P)"
+
+    # Generate a unique ID: YYYYMMDD-HHMMSS-XXXX
+    WORKTREE_ID="$(date +%Y%m%d-%H%M%S)-$(head -c 2 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+    WORKTREE_BRANCH="worktree/claudius-${WORKTREE_ID}"
+
+    CLAUDIUS_DIR="${CLAUDIUS_DIR:-$HOME/.claudius}"
+    WORKTREE_DIR="$CLAUDIUS_DIR/worktrees/$WORKTREE_ID"
+    mkdir -p "$(dirname "$WORKTREE_DIR")"
+
+    # Create the worktree
+    echo "Creating worktree: $WORKTREE_BRANCH" >&2
+    git worktree add -b "$WORKTREE_BRANCH" "$WORKTREE_DIR" HEAD --quiet
+
+    # Create temp .git file for the container: points to /git-root/.git/worktrees/<id>
+    WORKTREE_DOTGIT_TMPFILE=$(mktemp)
+    printf 'gitdir: /git-root/.git/worktrees/%s\n' "$WORKTREE_ID" > "$WORKTREE_DOTGIT_TMPFILE"
+
+    # Create temp gitdir file: tells git the worktree lives at /workspace
+    WORKTREE_GITDIR_TMPFILE=$(mktemp)
+    printf '/workspace\n' > "$WORKTREE_GITDIR_TMPFILE"
+
+    echo "Worktree ready at $WORKTREE_DIR (branch: $WORKTREE_BRANCH)" >&2
+
+fi
+
 # ---- build docker run flags ----
 docker_flags=( --rm )
 
@@ -803,8 +880,14 @@ if [ -t 0 ]; then
 fi
 
 # Mount project directory as the workspace
+# Worktree: mount the worktree dir + original .git dir with path fixups
 # Mudbox: read-only mount — Sandbox: no mount — Normal: read-write mount
-if [ "$MUDBOX" = true ]; then
+if [ "$WORKTREE" = true ]; then
+    docker_flags+=( -v "$WORKTREE_DIR:/workspace" )
+    docker_flags+=( -v "$WORKTREE_GIT_DIR:/git-root/.git" )
+    docker_flags+=( -v "$WORKTREE_DOTGIT_TMPFILE:/workspace/.git" )
+    docker_flags+=( -v "$WORKTREE_GITDIR_TMPFILE:/git-root/.git/worktrees/${WORKTREE_ID}/gitdir" )
+elif [ "$MUDBOX" = true ]; then
     docker_flags+=( -v "$(pwd):/workspace:ro" )
 elif [ "$SANDBOX" = false ]; then
     docker_flags+=( -v "$(pwd):/workspace" )
@@ -894,7 +977,9 @@ if [ "$SANDBOX" = false ] && [ "$MUDBOX" = false ]; then
 
     if [ "$NM_ISOLATE" = true ]; then
         # Track whether node_modules existed before we run (Docker creates a ghost dir for the mount)
-        [ ! -d "node_modules" ] && NM_PREEXISTED=false
+        nm_check_dir="node_modules"
+        [ "$WORKTREE" = true ] && [ -n "$WORKTREE_DIR" ] && nm_check_dir="$WORKTREE_DIR/node_modules"
+        [ ! -d "$nm_check_dir" ] && NM_PREEXISTED=false
 
         # Generate a stable hash from the workspace path for the volume name (skip if already computed)
         if [ -z "${nm_hash:-}" ]; then
@@ -1063,6 +1148,13 @@ else
     docker_flags+=( -e "AGENT_AUTONOMY_MODE=regular" )
 fi
 
+# Expose worktree info inside the container
+if [ "$WORKTREE" = true ]; then
+    docker_flags+=( -e "CLAUDIUS_WORKTREE=1" )
+    docker_flags+=( -e "CLAUDIUS_WORKTREE_BRANCH=$WORKTREE_BRANCH" )
+    docker_flags+=( -e "CLAUDIUS_WORKTREE_ORIGINAL_BRANCH=$WORKTREE_ORIGINAL_BRANCH" )
+fi
+
 # Build Claude CLI flags
 claude_flags=( --model "$MODEL" )
 
@@ -1091,6 +1183,13 @@ if [ "$YOLO" = true ]; then
     SYSTEM_PROMPT="$SYSTEM_PROMPT
 
 You are running in YOLO mode (AGENT_AUTONOMY_MODE=yolo). The environment variable \$AGENT_AUTONOMY_MODE is set to 'yolo'. In this mode you are expected to act with maximum autonomy — fulfill the user's intent with as little interaction as possible. Do not ask for confirmation before taking actions. Prefer doing over asking. If a task is ambiguous, make a reasonable choice and proceed. Commit your work without confirmation."
+fi
+
+# In worktree mode, tell Claude about the isolated branch
+if [ "$WORKTREE" = true ]; then
+    SYSTEM_PROMPT="$SYSTEM_PROMPT
+
+You are running in WORKTREE mode. Your workspace is an isolated git worktree branched from '${WORKTREE_ORIGINAL_BRANCH}' on branch '${WORKTREE_BRANCH}'. Commit freely — changes will be merged back when the session ends."
 fi
 
 claude_flags+=( --append-system-prompt "$SYSTEM_PROMPT" )
@@ -1140,11 +1239,17 @@ cleanup() {
     [ -n "$CLAUDE_JSON_TMPFILE" ] && rm -f "$CLAUDE_JSON_TMPFILE"
     [ -n "$SETTINGS_TMPFILE" ] && rm -f "$SETTINGS_TMPFILE"
     [ -n "$CREDS_TMPFILE" ] && rm -f "$CREDS_TMPFILE"
+    [ -n "$WORKTREE_DOTGIT_TMPFILE" ] && rm -f "$WORKTREE_DOTGIT_TMPFILE"
+    [ -n "$WORKTREE_GITDIR_TMPFILE" ] && rm -f "$WORKTREE_GITDIR_TMPFILE"
 
     # Remove the ghost node_modules directory Docker creates for the volume mount
     # Only if it didn't exist before we started and is now empty
-    if [ "$NM_PREEXISTED" = false ] && [ -d "node_modules" ]; then
-        rmdir "node_modules" 2>/dev/null || true
+    if [ "$NM_PREEXISTED" = false ]; then
+        nm_ghost_dir="node_modules"
+        [ "$WORKTREE" = true ] && [ -n "$WORKTREE_DIR" ] && nm_ghost_dir="$WORKTREE_DIR/node_modules"
+        if [ -d "$nm_ghost_dir" ]; then
+            rmdir "$nm_ghost_dir" 2>/dev/null || true
+        fi
     fi
 }
 trap cleanup EXIT
@@ -1161,6 +1266,86 @@ fi
 docker run "${docker_flags[@]}" "$IMAGE" claude "${claude_flags[@]}" "$@"
 exit_code=$?
 
+# ---- worktree post-exit: merge changes back ----
+if [ "$WORKTREE" = true ]; then
+
+    # Count new commits on the worktree branch
+    commits_ahead=$(git rev-list --count "${WORKTREE_ORIGINAL_BRANCH}..${WORKTREE_BRANCH}" 2>/dev/null || echo 0)
+
+    if [ "$commits_ahead" -eq 0 ]; then
+        # No commits — clean up silently
+        echo "" >&2
+        echo "No commits on $WORKTREE_BRANCH — cleaning up." >&2
+        git worktree remove --force "$WORKTREE_DIR" 2>/dev/null || true
+        git branch -D "$WORKTREE_BRANCH" 2>/dev/null || true
+        git worktree prune 2>/dev/null || true
+    else
+        echo "" >&2
+        echo "$commits_ahead commit(s) on $WORKTREE_BRANCH — merging into $WORKTREE_ORIGINAL_BRANCH..." >&2
+
+        # Pre-flight: ensure we're on the original branch and working tree is clean
+        current_branch=$(git symbolic-ref --short HEAD 2>/dev/null || true)
+        worktree_dirty=$(git diff --quiet 2>/dev/null && git diff --cached --quiet 2>/dev/null; echo $?)
+
+        merge_ok=false
+
+        if [ "$worktree_dirty" != "0" ]; then
+            echo "Warning: working tree is dirty — skipping auto-merge." >&2
+        elif [ "$current_branch" != "$WORKTREE_ORIGINAL_BRANCH" ]; then
+            echo "Warning: no longer on $WORKTREE_ORIGINAL_BRANCH (now on $current_branch) — skipping auto-merge." >&2
+        else
+            # Try fast-forward first, then regular merge
+            if git merge --ff-only "$WORKTREE_BRANCH" 2>/dev/null; then
+                echo "Fast-forward merged $WORKTREE_BRANCH into $WORKTREE_ORIGINAL_BRANCH." >&2
+                merge_ok=true
+            elif git merge --no-edit "$WORKTREE_BRANCH" 2>/dev/null; then
+                echo "Merged $WORKTREE_BRANCH into $WORKTREE_ORIGINAL_BRANCH (merge commit created)." >&2
+                merge_ok=true
+            else
+                git merge --abort 2>/dev/null || true
+                echo "Merge conflict — $WORKTREE_BRANCH could not be auto-merged." >&2
+            fi
+        fi
+
+        if [ "$merge_ok" = true ]; then
+            # Clean up branch and worktree
+            git worktree remove --force "$WORKTREE_DIR" 2>/dev/null || true
+            git branch -D "$WORKTREE_BRANCH" 2>/dev/null || true
+            git worktree prune 2>/dev/null || true
+        else
+            # Offer to push the branch for manual merge
+            echo "" >&2
+            echo "The branch $WORKTREE_BRANCH has been preserved." >&2
+
+            if [ -t 0 ]; then
+                printf 'Push %s to remote? [y/N] ' "$WORKTREE_BRANCH" >&2
+                read -r push_answer
+                case "$push_answer" in
+                    [yY])
+                        remote=$(git remote | head -1)
+                        if [ -n "$remote" ]; then
+                            git push "$remote" "$WORKTREE_BRANCH" 2>&1 >&2
+                            echo "Pushed to $remote/$WORKTREE_BRANCH." >&2
+                        else
+                            echo "No remote found — push manually." >&2
+                        fi
+                        ;;
+                esac
+            fi
+
+            echo "" >&2
+            echo "To merge manually:" >&2
+            echo "  git merge $WORKTREE_BRANCH" >&2
+            echo "To discard:" >&2
+            echo "  git worktree remove --force $WORKTREE_DIR && git branch -D $WORKTREE_BRANCH" >&2
+
+            # Clean up worktree directory but keep the branch
+            git worktree remove --force "$WORKTREE_DIR" 2>/dev/null || true
+            git worktree prune 2>/dev/null || true
+        fi
+    fi
+fi
+
 # Show claudius resume hint if a session was active
 if [ -f "$HISTORY_FILE" ]; then
     history_lines_after=$(wc -l < "$HISTORY_FILE")
@@ -1172,13 +1357,17 @@ if [ -f "$HISTORY_FILE" ]; then
             [ "$YOLO" = true ] && modifiers="$modifiers yolo"
             [ "$SANDBOX" = true ] && modifiers="$modifiers sandbox"
             [ "$MUDBOX" = true ] && modifiers="$modifiers mudbox"
+            [ "$WORKTREE" = true ] && modifiers="$modifiers worktree"
 
             # Persist modifiers so `claudius history` can show them
             CLAUDIUS_DIR="${CLAUDIUS_DIR:-$HOME/.claudius}"
             mkdir -p "$CLAUDIUS_DIR"
             printf '%s\t%s\n' "$session_id" "${modifiers# }" >> "$CLAUDIUS_DIR/session_modifiers"
 
-            printf '\n  Resume this session with:\n  claudius%s resume %s\n\n' "$modifiers" "$session_id"
+            # Worktree sessions can't be meaningfully resumed in the same worktree
+            if [ "$WORKTREE" = false ]; then
+                printf '\n  Resume this session with:\n  claudius%s resume %s\n\n' "$modifiers" "$session_id"
+            fi
         fi
     fi
 fi

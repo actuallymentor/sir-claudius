@@ -52,6 +52,10 @@ claudius sandbox
 # Read-only workspace — explore code without modifying it
 claudius mudbox
 
+# Isolated git worktree — safe for parallel sessions
+claudius worktree
+claudius worktree yolo        # worktree + skip permissions
+
 # Chain commands in any order
 claudius yolo mudbox          # read-only workspace + skip permissions
 claudius sandbox yolo         # no workspace + skip permissions
@@ -117,9 +121,30 @@ In mudbox mode:
 - Host config files and session data remain writable (like normal mode)
 - Claude can create files in container-local directories outside `/workspace`
 
+## Worktree mode
+
+`claudius worktree` creates an isolated [git worktree](https://git-scm.com/docs/git-worktree) for each session. Multiple Claude instances can work on the same repo simultaneously without stepping on each other's changes.
+
+```sh
+# Start an isolated worktree session
+claudius worktree
+
+# Worktree + full autonomy
+claudius worktree yolo
+```
+
+On exit, claudius automatically:
+1. **Fast-forward merges** the worktree branch if no conflicts exist
+2. **Creates a merge commit** if fast-forward isn't possible but merge succeeds
+3. **Preserves the branch** if there are conflicts, and offers to push it to the remote
+
+Worktree mode is incompatible with `sandbox`, `mudbox`, `continue`, and `resume`.
+
+Worktrees are stored in `$CLAUDIUS_DIR/worktrees/` (default: `~/.claudius/worktrees/`) and cleaned up automatically after a successful merge.
+
 ## Chaining commands
 
-Chainable commands (`yolo`, `sandbox`, `mudbox`, `continue`, `resume`) can be combined in any order:
+Chainable commands (`yolo`, `sandbox`, `mudbox`, `worktree`, `continue`, `resume`) can be combined in any order:
 
 ```sh
 claudius yolo mudbox          # read-only workspace + skip permissions

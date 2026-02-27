@@ -13,6 +13,10 @@ Docker-based sandbox for running Claude Code. Key files: `Dockerfile`, `claudius
 - OAuth auth bug: pre-flight check can rotate refresh tokens, invalidating credentials captured before the check. Fix: two-phase auth — detect first, capture after pre-flight (fixed 2026-02-27)
 - node_modules isolation choice persisted in `$CLAUDIUS_DIR/nm_preferences` (tab-separated hash→Y|N). Returning users get 5s timeout defaulting to previous choice (added 2026-02-27)
 
+## Worktree Mode (added 2026-02-27)
+
+`claudius worktree` creates an isolated git worktree per session. Key design: temp files fix up `.git` and `gitdir` paths so git works inside Docker. On exit, auto-merges (ff-only then regular) or preserves branch on conflict. See `GOTCHAS.md` for Docker path details.
+
 ## Gotchas
 
 See `GOTCHAS.md` for accumulated pitfalls
