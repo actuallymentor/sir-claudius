@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.11.0] - 2026-02-27
+
+### Added
+- resumable worktree sessions — choose "keep" on exit, then `claudius resume <id>` to re-enter
+- `claudius worktree list` — show active (unmerged) worktrees with age and session info
+- `claudius worktree clean` — merge/cleanup worktrees by ID, `--merged`, `--stale`, or `--all`
+- worktree metadata persisted to `~/.claudius/worktrees/<id>.json` for session tracking
+- stale worktree warning (30+ days) on every invocation, throttled to once per day
+- history listing shows worktree branch indicator for worktree sessions
+- history inspect shows worktree status (active/merged) and branch name
+
+### Changed
+- `resume` and `continue` now auto-detect worktree sessions and re-enter the worktree
+- post-exit merge prompt replaces unconditional auto-merge: `[m]erge` or `[k]eep`
+- session_modifiers format extended with `worktree:<ID>` token for reverse lookup
+- resume hint strips internal worktree token, showing clean `claudius resume <id>` command
+
 ## [0.10.1] - 2026-02-27
 
 ### Fixed
