@@ -5,7 +5,7 @@ set -e
 # claudius — run Claude Code inside a Docker container
 # -----------------------------------------------------------
 
-CLAUDIUS_VERSION="0.8.2"
+CLAUDIUS_VERSION="0.9.0"
 REPO_URL="https://raw.githubusercontent.com/actuallymentor/sir-claudius/main/claudius?cachebust=$(date +%s)"
 
 IMAGE="${CLAUDE_SANDBOX_IMAGE:-actuallymentor/sir-claudius:latest}"
@@ -835,15 +835,58 @@ if [ "$SANDBOX" = false ] && [ "$MUDBOX" = false ]; then
         done
 
         if [ "$node_detected" = true ]; then
+            # Compute workspace hash early — needed for preference lookup and volume name
+            workspace_path="$(pwd -P)"
+            if command -v shasum > /dev/null 2>&1; then
+                nm_hash=$(printf '%s' "$workspace_path" | shasum -a 256 | cut -c1-12)
+            else
+                nm_hash=$(printf '%s' "$workspace_path" | sha256sum | cut -c1-12)
+            fi
+
+            # Look up previous choice from preferences file
+            CLAUDIUS_DIR="${CLAUDIUS_DIR:-$HOME/.claudius}"
+            NM_PREFS_FILE="$CLAUDIUS_DIR/nm_preferences"
+            nm_previous=""
+            if [ -f "$NM_PREFS_FILE" ]; then
+                nm_previous=$(grep "^${nm_hash}	" "$NM_PREFS_FILE" | tail -1 | cut -f2)
+            fi
+
             if [ -t 0 ]; then
-                printf 'Node.js project detected. Isolate node_modules in the container? [Y/n] ' >&2
-                read -r nm_answer
+                # Build prompt hint and default based on previous choice
+                if [ "$nm_previous" = "N" ]; then
+                    nm_hint="[y/N]"
+                    nm_default="N"
+                else
+                    # Previous=Y or first time → default to isolate
+                    nm_hint="[Y/n]"
+                    nm_default="Y"
+                fi
+
+                if [ -n "$nm_previous" ]; then
+                    # Returning user — 5s timeout, default to previous choice
+                    printf 'Node.js project detected. Isolate node_modules in the container? %s (5s) ' "$nm_hint" >&2
+                    read -r -t 5 nm_answer || { nm_answer=""; printf '\n' >&2; }
+                else
+                    # First time — wait forever
+                    printf 'Node.js project detected. Isolate node_modules in the container? %s ' "$nm_hint" >&2
+                    read -r nm_answer
+                fi
+
+                # Empty answer (Enter or timeout) → use default
+                [ -z "$nm_answer" ] && nm_answer="$nm_default"
+
                 case "$nm_answer" in
                     [nN]) NM_ISOLATE=false ;;
                     *)    NM_ISOLATE=true ;;
                 esac
+
+                # Persist choice
+                nm_choice="Y"
+                [ "$NM_ISOLATE" = false ] && nm_choice="N"
+                mkdir -p "$CLAUDIUS_DIR"
+                printf '%s\t%s\n' "$nm_hash" "$nm_choice" >> "$NM_PREFS_FILE"
             else
-                # Non-interactive: default to isolating
+                # Non-interactive: default to isolating, no persistence
                 NM_ISOLATE=true
             fi
         fi
@@ -853,12 +896,14 @@ if [ "$SANDBOX" = false ] && [ "$MUDBOX" = false ]; then
         # Track whether node_modules existed before we run (Docker creates a ghost dir for the mount)
         [ ! -d "node_modules" ] && NM_PREEXISTED=false
 
-        # Generate a stable hash from the workspace path for the volume name
-        workspace_path="$(pwd -P)"
-        if command -v shasum > /dev/null 2>&1; then
-            nm_hash=$(printf '%s' "$workspace_path" | shasum -a 256 | cut -c1-12)
-        else
-            nm_hash=$(printf '%s' "$workspace_path" | sha256sum | cut -c1-12)
+        # Generate a stable hash from the workspace path for the volume name (skip if already computed)
+        if [ -z "${nm_hash:-}" ]; then
+            workspace_path="$(pwd -P)"
+            if command -v shasum > /dev/null 2>&1; then
+                nm_hash=$(printf '%s' "$workspace_path" | shasum -a 256 | cut -c1-12)
+            else
+                nm_hash=$(printf '%s' "$workspace_path" | sha256sum | cut -c1-12)
+            fi
         fi
 
         docker_flags+=( -v "claudius-nm-${nm_hash}:/workspace/node_modules" )

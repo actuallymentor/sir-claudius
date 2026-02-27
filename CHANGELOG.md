@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.0] - 2026-02-27
+
+### Added
+- persist node_modules isolation choice per workspace — remembered across runs
+- returning users get a 5-second timeout that defaults to their previous choice
+- first-time users still get an indefinite prompt (default: isolate)
+
 ## [0.8.2] - 2026-02-27
 
 ### Fixed

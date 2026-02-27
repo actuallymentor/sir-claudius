@@ -11,6 +11,7 @@ Docker-based sandbox for running Claude Code. Key files: `Dockerfile`, `claudius
 - Auto-accept uses simple 10s sleep before sending Enter — countdown title bar removed as unnecessary (simplified 2026-02-25)
 - Claude Code TUI uses `\x1b[\d*C` (cursor-forward) as visual spaces; must replace with real space before stripping ANSI (fixed 2026-02-25)
 - OAuth auth bug: pre-flight check can rotate refresh tokens, invalidating credentials captured before the check. Fix: two-phase auth — detect first, capture after pre-flight (fixed 2026-02-27)
+- node_modules isolation choice persisted in `$CLAUDIUS_DIR/nm_preferences` (tab-separated hash→Y|N). Returning users get 5s timeout defaulting to previous choice (added 2026-02-27)
 
 ## Gotchas
 
