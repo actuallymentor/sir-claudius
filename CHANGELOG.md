@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.10.1] - 2026-02-27
+
+### Fixed
+- mark `/workspace` as git safe directory in entrypoint to fix "dubious ownership" errors on bind mounts
+
 ## [0.10.0] - 2026-02-27
 
 ### Added

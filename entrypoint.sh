@@ -1,5 +1,11 @@
 #!/bin/bash
 
+# Mark the bind-mounted workspace as a safe git directory.
+# The host UID rarely matches the container's node user, which makes git
+# refuse to operate ("dubious ownership"). The container itself is the
+# security boundary, so this is safe.
+git config --global --add safe.directory /workspace
+
 # Fix ownership on the isolated node_modules volume.
 # Docker seeds named volumes from the mount point, copying host-owned files
 # (e.g. UID 501 on macOS). The container's node user (UID 1000) can't modify
