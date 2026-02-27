@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.2] - 2026-02-27
+
+### Fixed
+- auth token race condition: pre-flight check could rotate OAuth tokens before credentials were captured, causing 401 in the container. Credentials are now captured after the pre-flight check.
+
+### Changed
+- simplify pre-flight auth check prompt (saves tokens)
+
 ## [0.8.1] - 2026-02-25
 
 ### Fixed

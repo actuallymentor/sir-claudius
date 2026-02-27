@@ -5,7 +5,7 @@ set -e
 # claudius — run Claude Code inside a Docker container
 # -----------------------------------------------------------
 
-CLAUDIUS_VERSION="0.8.1"
+CLAUDIUS_VERSION="0.8.2"
 REPO_URL="https://raw.githubusercontent.com/actuallymentor/sir-claudius/main/claudius?cachebust=$(date +%s)"
 
 IMAGE="${CLAUDE_SANDBOX_IMAGE:-actuallymentor/sir-claudius:latest}"
@@ -676,14 +676,76 @@ check_for_update &
 # ---- resolve authentication ----
 # Priority: env var > host Claude CLI credentials file > token file > API key
 #
-# When we can get the full credentials JSON (with refresh token), we mount
-# it into the container as .credentials.json. This lets Claude Code handle
-# its own token refresh — no more expired tokens in long sessions.
+# Credentials are resolved in two phases:
+#   1. Detection — check what auth is available (without reading secrets)
+#   2. Capture  — read credentials AFTER the pre-flight check
+#
+# Why two phases? The pre-flight check runs `claude -p "..."` on the host,
+# which can trigger an OAuth token refresh — rotating both access and refresh
+# tokens. If we captured credentials before the check, the container would
+# get stale tokens and hit a 401. By capturing after, we always pick up
+# the freshly-refreshed credentials.
 OAUTH_TOKEN="${CLAUDE_CODE_OAUTH_TOKEN:-}"
 CREDS_TMPFILE=""
+HAS_HOST_CREDS=false
 
-# When no explicit token, try to mount the host's full credentials
+# Phase 1: detect available credentials (don't read secrets yet)
 if [ -z "$OAUTH_TOKEN" ]; then
+
+    # On macOS, check if credentials exist in the Keychain (no -w = no password extraction)
+    if command -v security > /dev/null 2>&1 \
+        && security find-generic-password -s "Claude Code-credentials" > /dev/null 2>&1; then
+        HAS_HOST_CREDS=true
+    fi
+
+    # On Linux, check if the credentials file exists
+    if [ "$HAS_HOST_CREDS" = false ] && [ -f "$HOME/.claude/.credentials.json" ]; then
+        HAS_HOST_CREDS=true
+    fi
+
+fi
+
+# Fall back to the claudius setup token file (static token, no refresh)
+if [ "$HAS_HOST_CREDS" = false ] && [ -z "$OAUTH_TOKEN" ] && [ -f "$TOKEN_FILE" ]; then
+    OAUTH_TOKEN=$(sed 's/\x1b\[[0-9;]*[A-Za-z]//g' "$TOKEN_FILE" | grep -o 'sk-ant-[A-Za-z0-9_-]*' | head -n 1)
+fi
+
+# Bail if we have no authentication at all
+if [ "$HAS_HOST_CREDS" = false ] && [ -z "$OAUTH_TOKEN" ] && [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+    echo "No authentication found." >&2
+    echo "" >&2
+    echo "Run:  claudius setup" >&2
+    echo "  or: export ANTHROPIC_API_KEY=sk-..." >&2
+    exit 1
+fi
+
+# ---- pre-flight auth check: verify credentials work before launching ----
+# Runs BEFORE capturing credentials — if the host's Claude refreshes the
+# OAuth token during this check, we'll pick up the fresh tokens in phase 2.
+if [ "$HAS_HOST_CREDS" = true ] && command -v claude > /dev/null 2>&1; then
+    printf 'Checking if you are logged in... ' >&2
+    if auth_output=$(claude -p "respond with ok" 2>&1); then
+        echo "ok" >&2
+    else
+        echo "failed" >&2
+        # Check for authentication-specific errors
+        if echo "$auth_output" | grep -qi "authentication\|401\|expired\|unauthorized"; then
+            echo "" >&2
+            echo "Your Claude credentials appear to be expired or invalid." >&2
+            echo "$auth_output" >&2
+            echo "" >&2
+            echo "Please log in on the host:" >&2
+            echo '  claude "/login"' >&2
+            exit 1
+        fi
+        # Non-auth error — warn but continue (might work inside the container)
+        echo "Warning: host auth check failed, proceeding anyway..." >&2
+        echo "$auth_output" >&2
+    fi
+fi
+
+# Phase 2: capture credentials for the container (after any pre-flight refresh)
+if [ -z "$OAUTH_TOKEN" ] && [ "$HAS_HOST_CREDS" = true ]; then
 
     CREDS_JSON=""
 
@@ -706,44 +768,6 @@ if [ -z "$OAUTH_TOKEN" ]; then
         chmod 600 "$CREDS_TMPFILE"
     fi
 
-fi
-
-# Fall back to the claudius setup token file (static token, no refresh)
-if [ -z "$CREDS_TMPFILE" ] && [ -z "$OAUTH_TOKEN" ] && [ -f "$TOKEN_FILE" ]; then
-    OAUTH_TOKEN=$(sed 's/\x1b\[[0-9;]*[A-Za-z]//g' "$TOKEN_FILE" | grep -o 'sk-ant-[A-Za-z0-9_-]*' | head -n 1)
-fi
-
-# Bail if we have no authentication at all
-if [ -z "$CREDS_TMPFILE" ] && [ -z "$OAUTH_TOKEN" ] && [ -z "${ANTHROPIC_API_KEY:-}" ]; then
-    echo "No authentication found." >&2
-    echo "" >&2
-    echo "Run:  claudius setup" >&2
-    echo "  or: export ANTHROPIC_API_KEY=sk-..." >&2
-    exit 1
-fi
-
-# ---- pre-flight auth check: verify credentials work before launching ----
-# Only runs when the host has `claude` installed and we're using mounted credentials
-if [ -n "$CREDS_TMPFILE" ] && command -v claude > /dev/null 2>&1; then
-    printf 'Checking if you are logged in... ' >&2
-    if auth_output=$(claude -p "The current time is $(date -u '+%Y-%m-%d %H:%M:%S UTC'). What do you think about that? Respond with just ok" 2>&1); then
-        echo "ok" >&2
-    else
-        echo "failed" >&2
-        # Check for authentication-specific errors
-        if echo "$auth_output" | grep -qi "authentication\|401\|expired\|unauthorized"; then
-            echo "" >&2
-            echo "Your Claude credentials appear to be expired or invalid." >&2
-            echo "$auth_output" >&2
-            echo "" >&2
-            echo "Please log in on the host:" >&2
-            echo '  claude "/login"' >&2
-            exit 1
-        fi
-        # Non-auth error — warn but continue (might work inside the container)
-        echo "Warning: host auth check failed, proceeding anyway..." >&2
-        echo "$auth_output" >&2
-    fi
 fi
 
 # ---- safety check: warn if mounting $HOME or / as workspace ----
