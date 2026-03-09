@@ -8,20 +8,17 @@
 # -----------------------------------------------------------
 
 # Display toggles — all enabled by default, fully self-contained
-show_dir=1
+show_modifiers=1
 show_branch=1
 show_usage=1
 show_bar=1
 show_reset=1
 
-# Read JSON input from Claude Code (stdin)
-input=$(cat)
-current_dir_path=$(echo "$input" | grep -o '"current_dir":"[^"]*"' | sed 's/"current_dir":"//;s/"$//')
-current_dir=$(basename "$current_dir_path")
+# Read JSON input from Claude Code (stdin — currently unused but required)
+cat > /dev/null
 
 # ---- colours ----
 
-BLUE=$'\033[0;34m'
 GREEN=$'\033[0;32m'
 GRAY=$'\033[0;90m'
 YELLOW=$'\033[0;33m'
@@ -39,19 +36,24 @@ LEVEL_8=$'\033[38;5;166m'
 LEVEL_9=$'\033[38;5;160m'
 LEVEL_10=$'\033[38;5;124m'
 
-# ---- repo identifier (owner/repo from git remote) ----
+# ---- session modifiers (yolo, worktree, resume, etc.) ----
 
-dir_text=""
-if [ "$show_dir" = "1" ]; then
-    remote_url=$(git remote get-url origin 2>/dev/null)
-    if [ -n "$remote_url" ]; then
-        # Strip protocol, host, .git suffix → owner/repo
-        repo_id=$(echo "$remote_url" \
-            | sed 's#.*github\.com[:/]##' \
-            | sed 's/\.git$//')
-        dir_text="${BLUE}${repo_id}${RESET}"
+CYAN=$'\033[0;36m'
+MAGENTA=$'\033[0;35m'
+
+modifiers_text=""
+if [ "$show_modifiers" = "1" ]; then
+    mods="${CLAUDIUS_MODIFIERS:-}"
+    if [ -n "$mods" ] && [ "$mods" != "default" ]; then
+        # Uppercase each modifier and join with middle dots
+        mod_display=""
+        for m in $mods; do
+            upper=$(echo "$m" | tr '[:lower:]' '[:upper:]')
+            mod_display="${mod_display:+${mod_display}·}${upper}"
+        done
+        modifiers_text="${MAGENTA}${mod_display}${RESET}"
     else
-        dir_text="${BLUE}${current_dir}${RESET}"
+        modifiers_text="${CYAN}claudius${RESET}"
     fi
 fi
 
@@ -142,7 +144,7 @@ fi
 output=""
 separator="${GRAY} │ ${RESET}"
 
-[ -n "$dir_text" ] && output="${dir_text}"
+[ -n "$modifiers_text" ] && output="${modifiers_text}"
 
 if [ -n "$branch_text" ]; then
     [ -n "$output" ] && output="${output}${separator}"

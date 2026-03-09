@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.0] - 2026-03-09
+
+### Changed
+- statusline shows session modifiers (YOLO, WORKTREE, RESUME, etc.) instead of repo name
+- `CLAUDIUS_MODIFIERS` env var exposed inside container for statusline consumption
+- default sessions show "claudius" label; modifier sessions show uppercased tags joined with `·`
+
 ## [0.12.1] - 2026-03-09
 
 ### Changed

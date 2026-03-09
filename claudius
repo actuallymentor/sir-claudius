@@ -5,7 +5,7 @@ set -e
 # claudius — run Claude Code inside a Docker container
 # -----------------------------------------------------------
 
-CLAUDIUS_VERSION="0.12.1"
+CLAUDIUS_VERSION="0.13.0"
 REPO_URL="https://raw.githubusercontent.com/actuallymentor/sir-claudius/main/claudius?cachebust=$(date +%s)"
 
 IMAGE="${CLAUDE_SANDBOX_IMAGE:-actuallymentor/sir-claudius:latest}"
@@ -1687,6 +1687,16 @@ if [ "$WORKTREE" = true ]; then
     docker_flags+=( -e "CLAUDIUS_WORKTREE_BRANCH=$WORKTREE_BRANCH" )
     docker_flags+=( -e "CLAUDIUS_WORKTREE_ORIGINAL_BRANCH=$WORKTREE_ORIGINAL_BRANCH" )
 fi
+
+# Build a human-readable modifiers string for the statusline
+_mods=""
+[ "$YOLO" = true ] && _mods="${_mods:+$_mods }yolo"
+[ "$MUDBOX" = true ] && _mods="${_mods:+$_mods }mudbox"
+[ "$SANDBOX" = true ] && _mods="${_mods:+$_mods }sandbox"
+[ "$WORKTREE" = true ] && _mods="${_mods:+$_mods }worktree"
+[ "$RESUME" = true ] && _mods="${_mods:+$_mods }resume"
+[ "$CONTINUE" = true ] && _mods="${_mods:+$_mods }resume"
+docker_flags+=( -e "CLAUDIUS_MODIFIERS=${_mods:-default}" )
 
 # Build Claude CLI flags
 claude_flags=( --model "$MODEL" )
