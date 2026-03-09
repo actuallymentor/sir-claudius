@@ -39,11 +39,20 @@ LEVEL_8=$'\033[38;5;166m'
 LEVEL_9=$'\033[38;5;160m'
 LEVEL_10=$'\033[38;5;124m'
 
-# ---- directory ----
+# ---- repo identifier (owner/repo from git remote) ----
 
 dir_text=""
 if [ "$show_dir" = "1" ]; then
-    dir_text="${BLUE}${current_dir}${RESET}"
+    remote_url=$(git remote get-url origin 2>/dev/null)
+    if [ -n "$remote_url" ]; then
+        # Strip protocol, host, .git suffix → owner/repo
+        repo_id=$(echo "$remote_url" \
+            | sed 's#.*github\.com[:/]##' \
+            | sed 's/\.git$//')
+        dir_text="${BLUE}${repo_id}${RESET}"
+    else
+        dir_text="${BLUE}${current_dir}${RESET}"
+    fi
 fi
 
 # ---- git branch ----

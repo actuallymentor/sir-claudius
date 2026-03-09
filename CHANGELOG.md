@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.12.1] - 2026-03-09
+
+### Changed
+- statusline shows `owner/repo` from git remote instead of working directory name
+
 ## [0.12.0] - 2026-03-09
 
 ### Added
