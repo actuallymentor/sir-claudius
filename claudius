@@ -5,7 +5,7 @@ set -e
 # claudius — run Claude Code inside a Docker container
 # -----------------------------------------------------------
 
-CLAUDIUS_VERSION="0.11.0"
+CLAUDIUS_VERSION="0.12.0"
 REPO_URL="https://raw.githubusercontent.com/actuallymentor/sir-claudius/main/claudius?cachebust=$(date +%s)"
 
 IMAGE="${CLAUDE_SANDBOX_IMAGE:-actuallymentor/sir-claudius:latest}"
@@ -74,6 +74,8 @@ Environment variables:
   CLAUDE_CODE_OAUTH_TOKEN  OAuth token (skips credential lookup)
   ANTHROPIC_API_KEY      API key (fallback if no OAuth token)
   CLAUDIUS_NPM_ISOLATE   Set to 1 to always isolate, 0 to never isolate (default: auto-detect)
+  CLAUDE_SESSION_KEY     Session key for Claude usage tracking in the statusline
+  CLAUDE_ORG_ID          Organization ID for Claude usage tracking in the statusline
   CLAUDIUS_DIR           Override the claudius cache directory (default: ~/.claudius)
 
 All other arguments are passed through to Claude Code inside the container.
@@ -1533,37 +1535,44 @@ elif command -v jq > /dev/null 2>&1; then
 fi
 
 docker_flags+=( -v "$CLAUDE_JSON_TMPFILE:$CONTAINER_HOME/.claude.json" )
-# In yolo mode, create a writable copy of settings.json with the bypass
-# confirmation pre-accepted so Claude Code skips the "Bypass Permissions" dialog
-SETTINGS_TMPFILE=""
-if [ "$YOLO" = true ]; then
-    SETTINGS_TMPFILE=$(mktemp)
-    if [ -f "$HOME/.claude/settings.json" ]; then
-        cp "$HOME/.claude/settings.json" "$SETTINGS_TMPFILE"
-    else
-        echo '{}' > "$SETTINGS_TMPFILE"
-    fi
-    chmod 600 "$SETTINGS_TMPFILE"
+# Always create a writable copy of settings.json so we can patch paths for the
+# container (statusLine, etc). Yolo mode also injects skipDangerousModePermissionPrompt.
+SETTINGS_TMPFILE=$(mktemp)
+if [ -f "$HOME/.claude/settings.json" ]; then
+    cp "$HOME/.claude/settings.json" "$SETTINGS_TMPFILE"
+else
+    echo '{}' > "$SETTINGS_TMPFILE"
+fi
+chmod 600 "$SETTINGS_TMPFILE"
 
-    if command -v python3 > /dev/null 2>&1; then
-        python3 -c "
+if command -v python3 > /dev/null 2>&1; then
+    python3 -c "
 import json, sys
+
+yolo = sys.argv[2] == 'true'
+
 with open(sys.argv[1], 'r') as f:
     data = json.load(f)
-data['skipDangerousModePermissionPrompt'] = True
+
+# Rewrite the statusLine command to use the container's portable script
+sl = data.get('statusLine', {})
+cmd = sl.get('command', '')
+if 'statusline' in cmd.lower():
+    sl['command'] = 'bash /usr/local/bin/statusline.sh'
+    data['statusLine'] = sl
+
+# In yolo mode, pre-accept the bypass permissions dialog
+if yolo:
+    data['skipDangerousModePermissionPrompt'] = True
+
 with open(sys.argv[1], 'w') as f:
     json.dump(data, f)
-" "$SETTINGS_TMPFILE" 2>/dev/null || true
-    fi
-
-    docker_flags+=( -v "$SETTINGS_TMPFILE:$CONTAINER_HOME/.claude/settings.json" )
+" "$SETTINGS_TMPFILE" "$([ "$YOLO" = true ] && echo true || echo false)" 2>/dev/null || true
 fi
 
-for config_file in settings.json settings.local.json CLAUDE.md; do
-    # Skip settings.json when we already mounted the yolo-patched copy
-    if [ "$config_file" = "settings.json" ] && [ -n "$SETTINGS_TMPFILE" ]; then
-        continue
-    fi
+docker_flags+=( -v "$SETTINGS_TMPFILE:$CONTAINER_HOME/.claude/settings.json" )
+
+for config_file in settings.local.json CLAUDE.md; do
     if [ -f "$HOME/.claude/$config_file" ]; then
         docker_flags+=( -v "$HOME/.claude/$config_file:$CONTAINER_HOME/.claude/$config_file:ro" )
     fi
@@ -1578,6 +1587,22 @@ fi
 if [ -d "$HOME/.agents" ]; then
     docker_flags+=( -v "$HOME/.agents:$CONTAINER_HOME/.agents:ro" )
 fi
+
+# Pass Claude usage credentials for the statusline
+# Explicit env vars take priority; fall back to parsing the swift helper
+_session_key="${CLAUDE_SESSION_KEY:-}"
+_org_id="${CLAUDE_ORG_ID:-}"
+
+if [ -z "$_session_key" ] || [ -z "$_org_id" ]; then
+    SWIFT_FILE="$HOME/.claude/fetch-claude-usage.swift"
+    if [ -f "$SWIFT_FILE" ]; then
+        [ -z "$_session_key" ] && _session_key=$(grep -o 'sk-ant-sid[^"]*' "$SWIFT_FILE" | head -1)
+        [ -z "$_org_id" ]      && _org_id=$(grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' "$SWIFT_FILE" | head -1)
+    fi
+fi
+
+[ -n "$_session_key" ] && docker_flags+=( -e "CLAUDE_SESSION_KEY=$_session_key" )
+[ -n "$_org_id" ]      && docker_flags+=( -e "CLAUDE_ORG_ID=$_org_id" )
 
 # Pass GitHub CLI auth into the container
 # gh stores tokens in the system keychain (macOS) or credential manager, so

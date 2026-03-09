@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.12.0] - 2026-03-09
+
+### Added
+- portable statusline inside container — shows directory, git branch, and Claude usage %
+- `CLAUDE_SESSION_KEY` and `CLAUDE_ORG_ID` env vars for usage tracking credentials
+- auto-extract usage credentials from host's `~/.claude/fetch-claude-usage.swift`
+
+### Changed
+- settings.json is now always copied as a writable temp file (was only in yolo mode) to patch container paths
+
 ## [0.11.0] - 2026-02-27
 
 ### Added

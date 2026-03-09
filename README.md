@@ -170,7 +170,7 @@ Claudius resolves credentials in this order:
 |---|---|---|---|
 | Current directory | `/workspace` | read-write (read-only in mudbox, not mounted in sandbox) | Project files |
 | `~/.claude.json` | `/home/node/.claude.json` | read-write copy (read-only in sandbox) | Onboarding state, workspace trust |
-| `~/.claude/settings.json` | `/home/node/.claude/settings.json` | read-only | User settings |
+| `~/.claude/settings.json` | `/home/node/.claude/settings.json` | writable copy | User settings (patched for container paths) |
 | `~/.claude/settings.local.json` | `/home/node/.claude/settings.local.json` | read-only | Local settings overrides |
 | `~/.claude/CLAUDE.md` | `/home/node/.claude/CLAUDE.md` | read-only | Global instructions |
 | `~/.claude/skills/` | `/home/node/.claude/skills/` | read-only | Custom skills |
@@ -242,6 +242,8 @@ docker volume rm claudius-npm-cache claudius-uv-cache
 | `ANTHROPIC_API_KEY` | | Use an API key instead of OAuth |
 | `CLAUDE_SANDBOX_IMAGE` | `actuallymentor/sir-claudius:latest` | Pin to a specific image |
 | `CLAUDIUS_NPM_ISOLATE` | auto-detect | Set to `1` to always isolate, `0` to never isolate |
+| `CLAUDE_SESSION_KEY` | | Session key for Claude usage tracking in the statusline |
+| `CLAUDE_ORG_ID` | | Organization ID for Claude usage tracking in the statusline |
 | `CLAUDIUS_DIR` | `~/.claudius` | Override the claudius cache directory |
 
 ## Version pinning
