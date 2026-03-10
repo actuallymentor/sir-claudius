@@ -9,6 +9,7 @@
 
 # Display toggles — all enabled by default, fully self-contained
 show_modifiers=1
+show_repo=1
 show_branch=1
 show_usage=1
 show_bar=1
@@ -54,6 +55,22 @@ if [ "$show_modifiers" = "1" ]; then
         modifiers_text="${MAGENTA}${mod_display}${RESET}"
     else
         modifiers_text="${CYAN}claudius${RESET}"
+    fi
+fi
+
+# ---- repo identifier (owner/repo from git remote) ----
+
+BLUE=$'\033[0;34m'
+
+repo_text=""
+if [ "$show_repo" = "1" ]; then
+    remote_url=$(git remote get-url origin 2>/dev/null)
+    if [ -n "$remote_url" ]; then
+        # Strip protocol, host, .git suffix → owner/repo
+        repo_id=$(echo "$remote_url" \
+            | sed 's#.*github\.com[:/]##' \
+            | sed 's/\.git$//')
+        repo_text="${BLUE}${repo_id}${RESET}"
     fi
 fi
 
@@ -145,6 +162,11 @@ output=""
 separator="${GRAY} │ ${RESET}"
 
 [ -n "$modifiers_text" ] && output="${modifiers_text}"
+
+if [ -n "$repo_text" ]; then
+    [ -n "$output" ] && output="${output}${separator}"
+    output="${output}${repo_text}"
+fi
 
 if [ -n "$branch_text" ]; then
     [ -n "$output" ] && output="${output}${separator}"

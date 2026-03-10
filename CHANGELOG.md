@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.13.2] - 2026-03-10
+
+### Added
+- statusline shows `owner/repo` from git remote alongside session modifiers
+
 ## [0.13.1] - 2026-03-10
 
 ### Fixed
