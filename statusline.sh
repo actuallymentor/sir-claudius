@@ -177,4 +177,4 @@ if [ -n "$usage_text" ]; then
     output="${output}${usage_text}"
 fi
 
-printf "%s\n" "$output"
+printf "%s\n\n" "$output"
