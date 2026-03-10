@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.13.1] - 2026-03-10
+
+### Fixed
+- statusline not appearing for users without a pre-existing statusLine in settings.json
+
 ## [0.13.0] - 2026-03-09
 
 ### Changed

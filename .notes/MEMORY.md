@@ -17,9 +17,9 @@ Docker-based sandbox for running Claude Code. Key files: `Dockerfile`, `claudius
 
 `claudius worktree` creates an isolated git worktree per session. Key design: temp files fix up `.git` and `gitdir` paths so git works inside Docker. On exit, merge-or-keep prompt lets user defer merge. Metadata in `~/.claudius/worktrees/<id>.json` links sessions to worktrees. `session_modifiers` uses `worktree:<ID>` token for reverse lookup. `resume`/`continue` auto-detect worktree sessions. `worktree list` and `worktree clean` manage lifecycle. See `GOTCHAS.md` for Docker path details.
 
-## Statusline (added 2026-03-09)
+## Statusline (added 2026-03-09, modifiers 2026-03-09)
 
-Portable `statusline.sh` ships with the container image at `/usr/local/bin/statusline.sh`. The `claudius` script always creates a writable settings.json copy and rewrites the `statusLine.command` path to point to the container script. Usage tracking credentials (`CLAUDE_SESSION_KEY`, `CLAUDE_ORG_ID`) are extracted from `~/.claude/fetch-claude-usage.swift` or accepted as explicit env vars.
+Portable `statusline.sh` ships with the container image at `/usr/local/bin/statusline.sh`. The `claudius` script always creates a writable settings.json copy and rewrites the `statusLine.command` path to point to the container script. Usage tracking credentials (`CLAUDE_SESSION_KEY`, `CLAUDE_ORG_ID`) are extracted from `~/.claude/fetch-claude-usage.swift` or accepted as explicit env vars. First segment shows session modifiers (YOLO·WORKTREE·RESUME) via `CLAUDIUS_MODIFIERS` env var; defaults to "claudius" for plain sessions.
 
 ## Gotchas
 

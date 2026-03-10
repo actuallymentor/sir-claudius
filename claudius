@@ -5,7 +5,7 @@ set -e
 # claudius — run Claude Code inside a Docker container
 # -----------------------------------------------------------
 
-CLAUDIUS_VERSION="0.13.0"
+CLAUDIUS_VERSION="0.13.1"
 REPO_URL="https://raw.githubusercontent.com/actuallymentor/sir-claudius/main/claudius?cachebust=$(date +%s)"
 
 IMAGE="${CLAUDE_SANDBOX_IMAGE:-actuallymentor/sir-claudius:latest}"
@@ -1554,12 +1554,10 @@ yolo = sys.argv[2] == 'true'
 with open(sys.argv[1], 'r') as f:
     data = json.load(f)
 
-# Rewrite the statusLine command to use the container's portable script
+# Always set the statusLine command to the container's portable script
 sl = data.get('statusLine', {})
-cmd = sl.get('command', '')
-if 'statusline' in cmd.lower():
-    sl['command'] = 'bash /usr/local/bin/statusline.sh'
-    data['statusLine'] = sl
+sl['command'] = 'bash /usr/local/bin/statusline.sh'
+data['statusLine'] = sl
 
 # In yolo mode, pre-accept the bypass permissions dialog
 if yolo:
