@@ -46,11 +46,10 @@ modifiers_text=""
 if [ "$show_modifiers" = "1" ]; then
     mods="${CLAUDIUS_MODIFIERS:-}"
     if [ -n "$mods" ] && [ "$mods" != "default" ]; then
-        # Uppercase each modifier and join with middle dots
+        # Join modifiers with middle dots (lowercase)
         mod_display=""
         for m in $mods; do
-            upper=$(echo "$m" | tr '[:lower:]' '[:upper:]')
-            mod_display="${mod_display:+${mod_display}·}${upper}"
+            mod_display="${mod_display:+${mod_display}·}${m}"
         done
         modifiers_text="${MAGENTA}${mod_display}${RESET}"
     else
