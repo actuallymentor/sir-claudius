@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.13.3] - 2026-03-12
+
+### Fixed
+- plan approval sends Shift+Tab instead of Enter (Claude Code UI changed — Enter now rejects)
+- user input during 10s accept delay no longer blocked — keystrokes cancel auto-accept and forward to child
+
 ## [0.13.2] - 2026-03-10
 
 ### Added

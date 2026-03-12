@@ -4,8 +4,9 @@ PTY wrapper that auto-accepts plan mode prompts in Claude Code.
 
 When AGENT_AUTONOMY_MODE=yolo, Claude Code should run with maximum autonomy.
 Plan mode approval prompts still block waiting for user input — this wrapper
-monitors terminal output, detects those prompts, and sends Enter to accept
-the default (pre-selected) option.
+monitors terminal output, detects those prompts, and sends the appropriate
+keystroke to accept. Simple select prompts get Enter; plan approval gets
+Shift+Tab (bound to "yes-accept-edits" in the plan component).
 
 All I/O passes through transparently. The user can still type normally.
 """
@@ -41,13 +42,24 @@ log = logging.getLogger("auto-accept")
 
 # ─── Trigger patterns ────────────────────────────────────────────────
 # Each pattern is matched against ANSI-stripped terminal output.
-# On match, we wait briefly for the TUI to redraw, then send Enter.
+# On match, we wait briefly for the TUI to redraw, then send the
+# appropriate keystroke to accept.
 
-TRIGGER_PATTERNS = [
+# Patterns that accept via Enter (simple select prompts where the
+# desired option is already highlighted).
+ENTER_TRIGGERS = [
     "Yes, and bypass permissions",
     "Yes, clear context",
+]
+
+# Plan approval triggers that accept via Shift+Tab. The plan approval
+# UI changed — Enter now rejects the plan. Shift+Tab is a keyboard
+# shortcut bound directly to "yes-accept-edits" in the plan component.
+PLAN_TRIGGERS = [
     "needs your approval",
 ]
+
+ALL_TRIGGERS = ENTER_TRIGGERS + PLAN_TRIGGERS
 
 # Compiled regex to strip ANSI escape sequences before matching.
 # Covers CSI sequences (with optional ? prefix), OSC sequences, and
@@ -83,10 +95,18 @@ def strip_ansi(text):
     return ANSI_RE.sub("", text)
 
 
-def matches_trigger(text):
-    """Check if any trigger pattern appears in the stripped text."""
+def matched_trigger(text):
+    """Return the first matching trigger pattern, or None."""
     clean = strip_ansi(text)
-    return any(pattern in clean for pattern in TRIGGER_PATTERNS)
+    for pattern in ALL_TRIGGERS:
+        if pattern in clean:
+            return pattern
+    return None
+
+
+def is_plan_trigger(pattern):
+    """True if the matched pattern requires Shift+Tab instead of Enter."""
+    return pattern in PLAN_TRIGGERS
 
 
 def copy_terminal_size(from_fd, to_fd):
@@ -111,6 +131,49 @@ def drain_child_output(master_fd, stdout_fd):
             os.write(stdout_fd, chunk)
     except OSError:
         pass
+
+
+def wait_for_accept_delay(master_fd, stdin_fd, stdout_fd, delay):
+    """
+    Wait `delay` seconds while keeping I/O flowing.
+    Returns True if delay elapsed (proceed with auto-accept).
+    Returns False if the user typed something (cancel auto-accept).
+    """
+    deadline = time.monotonic() + delay
+    fds = [master_fd] + ([stdin_fd] if stdin_fd is not None else [])
+
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return True
+
+        try:
+            readable, _, _ = select.select(fds, [], [], min(remaining, 0.1))
+        except InterruptedError:
+            continue  # SIGWINCH etc — retry, don't cancel
+        except (select.error, ValueError):
+            return False
+
+        for fd in readable:
+            if fd == master_fd:
+                try:
+                    chunk = os.read(master_fd, 4096)
+                    if chunk:
+                        os.write(stdout_fd, chunk)
+                except OSError:
+                    pass
+            elif fd == stdin_fd:
+                try:
+                    data = os.read(stdin_fd, 1024)
+                except OSError:
+                    data = b""
+                if data:
+                    log.debug("User input during accept delay — cancelling auto-accept")
+                    try:
+                        os.write(master_fd, data)
+                    except OSError:
+                        pass
+                    return False
 
 
 def main():
@@ -229,24 +292,40 @@ def main():
 
                     # Check triggers
                     now = time.monotonic()
-                    if matches_trigger(output_buffer) and (now - last_accept_time) > DEBOUNCE_INTERVAL:
+                    trigger = matched_trigger(output_buffer)
+                    if trigger and (now - last_accept_time) > DEBOUNCE_INTERVAL:
                         last_accept_time = now
-                        log.debug("TRIGGER MATCHED — waiting %.1fs redraw + %ds accept delay", REDRAW_DELAY, ACCEPT_DELAY)
+                        log.debug("TRIGGER MATCHED (%s) — waiting %.1fs redraw + %ds accept delay", trigger, REDRAW_DELAY, ACCEPT_DELAY)
 
                         # Wait for the TUI to finish redrawing
                         time.sleep(REDRAW_DELAY)
                         drain_child_output(master_fd, stdout_fd)
 
-                        # Pause before accepting — gives the user time to intervene
-                        time.sleep(ACCEPT_DELAY)
-                        drain_child_output(master_fd, stdout_fd)
+                        # Active wait — keeps I/O flowing so the user can intervene
+                        should_accept = wait_for_accept_delay(
+                            master_fd,
+                            stdin_fd if stdin_is_tty else None,
+                            stdout_fd,
+                            ACCEPT_DELAY,
+                        )
 
-                        # Send Enter to accept the default selection
-                        log.debug("SENDING ENTER")
-                        try:
-                            os.write(master_fd, b"\r")
-                        except OSError:
-                            pass
+                        if should_accept:
+                            if is_plan_trigger(trigger):
+                                # Plan approval UI: Shift+Tab is bound to "yes-accept-edits"
+                                # which directly accepts the plan. Enter would reject it.
+                                log.debug("SENDING SHIFT+TAB (plan approval)")
+                                keystroke = b"\x1b[Z"
+                            else:
+                                # Simple select prompts: Enter picks the highlighted option
+                                log.debug("SENDING ENTER")
+                                keystroke = b"\r"
+
+                            try:
+                                os.write(master_fd, keystroke)
+                            except OSError:
+                                pass
+                        else:
+                            log.debug("Auto-accept cancelled — user took manual control")
 
                         # Clear the buffer so we don't re-trigger on residual text
                         output_buffer = ""
