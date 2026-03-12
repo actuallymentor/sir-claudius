@@ -5,7 +5,7 @@ set -e
 # claudius — run Claude Code inside a Docker container
 # -----------------------------------------------------------
 
-CLAUDIUS_VERSION="0.13.3"
+CLAUDIUS_VERSION="0.14.0"
 REPO_URL="https://raw.githubusercontent.com/actuallymentor/sir-claudius/main/claudius?cachebust=$(date +%s)"
 
 IMAGE="${CLAUDE_SANDBOX_IMAGE:-actuallymentor/sir-claudius:latest}"
@@ -28,6 +28,7 @@ Usage: claudius [command...] [options] [-- claude args...]
 
 Commands (chainable — combine in any order):
   yolo        Run with blanket permissions (--dangerously-skip-permissions)
+  autopilot   Auto-accept plan approval prompts (combine with yolo for full autonomy)
   sandbox     Run without mounting a workspace; host files are read-only
   mudbox      Mount the workspace as read-only (explore code without modifying it)
   worktree    Create an isolated git worktree (parallel sessions, resumable)
@@ -53,6 +54,8 @@ Options:
 Examples:
   claudius                        Interactive session in the current directory
   claudius yolo                   Skip all permission prompts
+  claudius autopilot              Auto-accept plan approvals
+  claudius yolo autopilot         Full autonomy (skip permissions + auto-accept plans)
   claudius mudbox                 Read-only workspace (code review, exploration)
   claudius worktree               Isolated worktree (parallel-safe)
   claudius worktree yolo          Isolated worktree + skip permissions
@@ -996,6 +999,7 @@ fi
 # Commands like yolo, sandbox, mudbox, continue, and resume can be
 # combined in any order: claudius yolo mudbox, claudius sandbox continue, etc.
 YOLO=false
+AUTOPILOT=false
 SANDBOX=false
 MUDBOX=false
 WORKTREE=false
@@ -1006,6 +1010,7 @@ RESUME_NAME=""
 while [ $# -gt 0 ]; do
     case "$1" in
         yolo)      YOLO=true; shift ;;
+        autopilot) AUTOPILOT=true; shift ;;
         sandbox)   SANDBOX=true; shift ;;
         mudbox)    MUDBOX=true; shift ;;
         worktree)  WORKTREE=true; shift ;;
@@ -1015,7 +1020,7 @@ while [ $# -gt 0 ]; do
             # Next non-flag, non-subcommand argument is the session name
             if [ $# -gt 0 ] && [[ "${1:-}" != -* ]]; then
                 case "$1" in
-                    yolo|sandbox|mudbox|worktree|continue|resume) ;;
+                    yolo|autopilot|sandbox|mudbox|worktree|continue|resume) ;;
                     *) RESUME_NAME="$1"; shift ;;
                 esac
             fi
@@ -1679,6 +1684,16 @@ else
     docker_flags+=( -e "AGENT_AUTONOMY_MODE=regular" )
 fi
 
+# Expose autopilot flag for the entrypoint (controls auto-accept.py)
+if [ "$AUTOPILOT" = true ]; then
+    docker_flags+=( -e "CLAUDIUS_AUTOPILOT=1" )
+fi
+
+# Expose yolo flag so auto-accept.py knows to handle permission prompts too
+if [ "$YOLO" = true ]; then
+    docker_flags+=( -e "CLAUDIUS_YOLO=1" )
+fi
+
 # Expose worktree info inside the container
 if [ "$WORKTREE" = true ]; then
     docker_flags+=( -e "CLAUDIUS_WORKTREE=1" )
@@ -1689,6 +1704,7 @@ fi
 # Build a human-readable modifiers string for the statusline
 _mods=""
 [ "$YOLO" = true ] && _mods="${_mods:+$_mods }yolo"
+[ "$AUTOPILOT" = true ] && _mods="${_mods:+$_mods }autopilot"
 [ "$MUDBOX" = true ] && _mods="${_mods:+$_mods }mudbox"
 [ "$SANDBOX" = true ] && _mods="${_mods:+$_mods }sandbox"
 [ "$WORKTREE" = true ] && _mods="${_mods:+$_mods }worktree"
@@ -1936,6 +1952,7 @@ if [ -f "$HISTORY_FILE" ]; then
             # Reconstruct the modifier flags used in this session
             modifiers=""
             [ "$YOLO" = true ] && modifiers="$modifiers yolo"
+            [ "$AUTOPILOT" = true ] && modifiers="$modifiers autopilot"
             [ "$SANDBOX" = true ] && modifiers="$modifiers sandbox"
             [ "$MUDBOX" = true ] && modifiers="$modifiers mudbox"
             # Worktree modifier includes the ID for reverse lookup

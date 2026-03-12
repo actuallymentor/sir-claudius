@@ -9,6 +9,7 @@ Docker-based sandbox for running Claude Code. Key files: `Dockerfile`, `claudius
 - GitHub CLI auth: mounted `~/.config/gh` read-only into container (added 2026-02-24)
 - Auto-accept plan mode prompts in YOLO mode via `auto-accept.py` PTY wrapper (added 2026-02-25)
 - Auto-accept uses active select-based wait during 10s delay — user keystrokes cancel auto-accept (fixed 2026-03-12)
+- `autopilot` modifier decoupled from `yolo` (v0.14.0) — yolo = permissions only, autopilot = plan acceptance, combine for full autonomy (added 2026-03-12)
 - Plan approval UI changed in Claude Code ~v2.1.x — Enter now rejects; Shift+Tab (`\x1b[Z`) bound to "yes-accept-edits" accepts (fixed 2026-03-12)
 - Claude Code TUI uses `\x1b[\d*C` (cursor-forward) as visual spaces; must replace with real space before stripping ANSI (fixed 2026-02-25)
 - OAuth auth bug: pre-flight check can rotate refresh tokens, invalidating credentials captured before the check. Fix: two-phase auth — detect first, capture after pre-flight (fixed 2026-02-27)

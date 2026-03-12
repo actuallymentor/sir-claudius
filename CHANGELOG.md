@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.14.0] - 2026-03-12
+
+### Added
+- `autopilot` modifier — auto-accept plan approval prompts independently of yolo
+
+### Changed
+- `yolo` no longer auto-accepts plans — use `claudius yolo autopilot` for full autonomy
+- permission bypass triggers in auto-accept.py gated by `CLAUDIUS_YOLO` env var
+
 ## [0.13.3] - 2026-03-12
 
 ### Fixed

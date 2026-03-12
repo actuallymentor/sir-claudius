@@ -1,14 +1,12 @@
 #!/usr/bin/env python3
 """
-PTY wrapper that auto-accepts plan mode prompts in Claude Code.
+PTY wrapper that auto-accepts prompts in Claude Code.
 
-When AGENT_AUTONOMY_MODE=yolo, Claude Code should run with maximum autonomy.
-Plan mode approval prompts still block waiting for user input — this wrapper
-monitors terminal output, detects those prompts, and sends the appropriate
-keystroke to accept. Simple select prompts get Enter; plan approval gets
-Shift+Tab (bound to "yes-accept-edits" in the plan component).
+Used by the "autopilot" modifier to auto-accept plan approval prompts.
+When CLAUDIUS_YOLO=1 is also set, permission bypass prompts are accepted too.
 
 All I/O passes through transparently. The user can still type normally.
+During the accept delay, keystrokes cancel auto-accept and forward to the child.
 """
 
 import os
@@ -45,21 +43,22 @@ log = logging.getLogger("auto-accept")
 # On match, we wait briefly for the TUI to redraw, then send the
 # appropriate keystroke to accept.
 
-# Patterns that accept via Enter (simple select prompts where the
-# desired option is already highlighted).
-ENTER_TRIGGERS = [
-    "Yes, and bypass permissions",
-    "Yes, clear context",
-]
-
-# Plan approval triggers that accept via Shift+Tab. The plan approval
-# UI changed — Enter now rejects the plan. Shift+Tab is a keyboard
-# shortcut bound directly to "yes-accept-edits" in the plan component.
+# Plan approval triggers — always active in autopilot mode.
+# Shift+Tab is bound to "yes-accept-edits" in the plan component.
+# (Enter rejects the plan in the current Claude Code UI.)
 PLAN_TRIGGERS = [
     "needs your approval",
 ]
 
-ALL_TRIGGERS = ENTER_TRIGGERS + PLAN_TRIGGERS
+# Permission bypass triggers — only active when CLAUDIUS_YOLO=1.
+# These accept via Enter (the desired option is already highlighted).
+YOLO_TRIGGERS = [
+    "Yes, and bypass permissions",
+    "Yes, clear context",
+]
+
+YOLO_MODE = os.environ.get("CLAUDIUS_YOLO", "0") == "1"
+ALL_TRIGGERS = PLAN_TRIGGERS + (YOLO_TRIGGERS if YOLO_MODE else [])
 
 # Compiled regex to strip ANSI escape sequences before matching.
 # Covers CSI sequences (with optional ? prefix), OSC sequences, and
