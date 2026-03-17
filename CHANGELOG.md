@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.0] - 2026-03-17
+
+### Added
+- live credential sync for long-running containers — tokens no longer go stale mid-session
+- Linux: mount host credentials file directly (instant refresh, no daemon needed)
+- macOS: background sync daemon re-extracts Keychain credentials every 5 minutes
+
 ## [0.14.0] - 2026-03-12
 
 ### Added
