@@ -1816,8 +1816,9 @@ fi
 
 # ---- clean up temporary files on exit ----
 cleanup() {
-    # Stop the macOS credential sync daemon if running
-    [ -n "$CRED_SYNC_PID" ] && kill "$CRED_SYNC_PID" 2>/dev/null || true
+    # Stop the macOS credential sync daemon if running.
+    # `wait` suppresses the shell's "Terminated" job control message.
+    [ -n "$CRED_SYNC_PID" ] && kill "$CRED_SYNC_PID" 2>/dev/null && wait "$CRED_SYNC_PID" 2>/dev/null || true
 
     [ -n "$CLAUDE_JSON_TMPFILE" ] && rm -f "$CLAUDE_JSON_TMPFILE"
     [ -n "$SETTINGS_TMPFILE" ] && rm -f "$SETTINGS_TMPFILE"
