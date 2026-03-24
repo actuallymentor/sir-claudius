@@ -5,7 +5,7 @@ set -e
 # claudius — run Claude Code inside a Docker container
 # -----------------------------------------------------------
 
-CLAUDIUS_VERSION="0.15.0"
+CLAUDIUS_VERSION="0.15.1"
 REPO_URL="https://raw.githubusercontent.com/actuallymentor/sir-claudius/main/claudius?cachebust=$(date +%s)"
 
 IMAGE="${CLAUDE_SANDBOX_IMAGE:-actuallymentor/sir-claudius:latest}"
@@ -1294,6 +1294,7 @@ if [ -z "$OAUTH_TOKEN" ] && [ "$HAS_HOST_CREDS" = true ]; then
                 done
             ) &
             CRED_SYNC_PID=$!
+            disown "$CRED_SYNC_PID"
         fi
     fi
 
@@ -1817,8 +1818,8 @@ fi
 # ---- clean up temporary files on exit ----
 cleanup() {
     # Stop the macOS credential sync daemon if running.
-    # `wait` suppresses the shell's "Terminated" job control message.
-    [ -n "$CRED_SYNC_PID" ] && kill "$CRED_SYNC_PID" 2>/dev/null && wait "$CRED_SYNC_PID" 2>/dev/null || true
+    # The process was disowned at launch, so no "Terminated" job message.
+    [ -n "$CRED_SYNC_PID" ] && kill "$CRED_SYNC_PID" 2>/dev/null || true
 
     [ -n "$CLAUDE_JSON_TMPFILE" ] && rm -f "$CLAUDE_JSON_TMPFILE"
     [ -n "$SETTINGS_TMPFILE" ] && rm -f "$SETTINGS_TMPFILE"

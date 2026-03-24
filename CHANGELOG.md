@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.15.1] - 2026-03-24
+
+### Fixed
+- suppress "Terminated" shell message from credential sync daemon on exit (disown instead of wait)
+
 ## [0.15.0] - 2026-03-17
 
 ### Added
