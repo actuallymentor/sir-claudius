@@ -87,6 +87,14 @@ ACCEPT_DELAY = 10
 # Prevents double-firing when the same prompt text appears in the redraw.
 DEBOUNCE_INTERVAL = 3.0
 
+# ─── LOOP.md — periodic re-prompting ────────────────────────────────
+# When /workspace/LOOP.md exists, auto-accept will periodically type
+# its contents into the Claude terminal when Claude goes idle.
+
+LOOP_FILE = "/workspace/LOOP.md"
+LOOP_IDLE_THRESHOLD = 120    # seconds of output silence → Claude is idle
+LOOP_DEFAULT_INTERVAL = 1800 # 30 minutes
+
 
 def strip_ansi(text):
     """Remove ANSI escape codes from text for clean pattern matching."""
@@ -130,6 +138,111 @@ def drain_child_output(master_fd, stdout_fd):
             os.write(stdout_fd, chunk)
     except OSError:
         pass
+
+
+def parse_interval_line(line):
+    """
+    Parse a single line for a time interval.
+
+    Supports:
+      - Cron syntax:      */5 * * * *  →  300 (seconds)
+      - Human-readable:   every 10 minutes  →  600
+                          4 hours, then do X  →  14400
+                          30 seconds  →  30
+
+    Returns seconds (int) or None if no interval found.
+    """
+    line = line.strip()
+    if not line:
+        return None
+
+    # ── Cron syntax (5 whitespace-separated fields) ──
+    fields = line.split()
+    if len(fields) >= 5:
+        minute, hour = fields[0], fields[1]
+        # All remaining fields must look like cron tokens
+        cron_token = re.compile(r'^[\d\*/,-]+$')
+        if all(cron_token.match(f) for f in fields[:5]):
+            # */N in minute field → every N minutes
+            m = re.match(r'^\*/(\d+)$', minute)
+            if m:
+                return int(m.group(1)) * 60
+            # Fixed minute + */N in hour field → every N hours
+            if re.match(r'^\d+$', minute):
+                m = re.match(r'^\*/(\d+)$', hour)
+                if m:
+                    return int(m.group(1)) * 3600
+            # Other valid cron → default interval (caller decides)
+            return None
+
+    # ── Human-readable: look for a number followed by a time unit ──
+    m = re.search(
+        r'(\d+)\s*'
+        r'(seconds?|secs?|minutes?|mins?|hours?|hrs?|days?)',
+        line, re.IGNORECASE,
+    )
+    if m:
+        value = int(m.group(1))
+        unit = m.group(2).lower()
+        if unit.startswith('s'):
+            return value
+        elif unit.startswith('m'):
+            return value * 60
+        elif unit.startswith('h'):
+            return value * 3600
+        elif unit.startswith('d'):
+            return value * 86400
+
+    return None
+
+
+def parse_loop_file(path):
+    """
+    Read LOOP.md and extract (interval_seconds, prompt_text).
+
+    Returns None if the file doesn't exist, is empty, or has no usable prompt.
+    """
+    try:
+        with open(path, "r") as f:
+            content = f.read()
+    except (OSError, IOError):
+        return None
+
+    if not content.strip():
+        return None
+
+    lines = content.split("\n")
+    first_line = lines[0]
+    interval = parse_interval_line(first_line)
+
+    if interval is not None:
+        # First line was an interval spec — prompt is the rest
+        prompt = "\n".join(lines[1:]).strip()
+    else:
+        # First line is not an interval — entire file is the prompt
+        prompt = content.strip()
+        interval = LOOP_DEFAULT_INTERVAL
+
+    if not prompt:
+        return None
+
+    return (interval, prompt)
+
+
+def format_interval(seconds):
+    """Format seconds into a human-readable interval string."""
+    if seconds < 60:
+        n = seconds
+        return f"{n} second{'s' if n != 1 else ''}"
+    elif seconds < 3600:
+        n = seconds // 60
+        return f"{n} minute{'s' if n != 1 else ''}"
+    elif seconds < 86400:
+        n = seconds // 3600
+        return f"{n} hour{'s' if n != 1 else ''}"
+    else:
+        n = seconds // 86400
+        return f"{n} day{'s' if n != 1 else ''}"
 
 
 def wait_for_accept_delay(master_fd, stdin_fd, stdout_fd, delay):
@@ -187,6 +300,19 @@ def main():
     stdin_is_tty = os.isatty(stdin_fd)
     log.debug("stdin_is_tty=%s", stdin_is_tty)
 
+    # ── LOOP.md detection (before fork, while terminal is still cooked) ──
+    loop_config = parse_loop_file(LOOP_FILE)
+    loop_interval = None
+    loop_prompt = None
+    if loop_config:
+        loop_interval, loop_prompt = loop_config
+        print(
+            f"\r🔄 LOOP.md detected — will re-prompt every "
+            f"{format_interval(loop_interval)}\r\n",
+            end="", flush=True,
+        )
+        log.debug("LOOP: interval=%ds, prompt=%r", loop_interval, loop_prompt[:80])
+
     # Save original terminal settings so we can restore on exit
     old_termios = None
     if stdin_is_tty:
@@ -230,6 +356,11 @@ def main():
     output_buffer = ""
     BUFFER_MAX = 4096
 
+    # LOOP.md idle tracking — timestamps for detecting when Claude goes quiet
+    last_child_output_time = time.monotonic()
+    last_user_input_time = 0.0
+    last_loop_prompt_time = 0.0
+
     # Build the list of fds to select on
     read_fds = [master_fd]
     if stdin_is_tty:
@@ -252,6 +383,7 @@ def main():
                         data = b""
                     if not data:
                         continue
+                    last_user_input_time = time.monotonic()
                     try:
                         os.write(master_fd, data)
                     except OSError:
@@ -266,6 +398,8 @@ def main():
                     if not data:
                         # Child closed its PTY — we're done
                         raise StopIteration
+
+                    last_child_output_time = time.monotonic()
 
                     # Pass through to the real terminal immediately
                     try:
@@ -328,6 +462,27 @@ def main():
 
                         # Clear the buffer so we don't re-trigger on residual text
                         output_buffer = ""
+
+            # ── LOOP.md: re-prompt Claude when idle ──
+            if loop_config:
+                now = time.monotonic()
+                idle = now - last_child_output_time
+                since_prompt = now - last_loop_prompt_time
+                since_input = now - last_user_input_time
+
+                if (idle >= LOOP_IDLE_THRESHOLD and
+                        since_prompt >= loop_interval and
+                        since_input >= LOOP_IDLE_THRESHOLD):
+                    log.debug(
+                        "LOOP: Claude idle %.0fs, re-prompting (interval=%ds)",
+                        idle, loop_interval,
+                    )
+                    try:
+                        os.write(master_fd, loop_prompt.encode("utf-8") + b"\r")
+                    except OSError:
+                        pass
+                    last_loop_prompt_time = now
+                    output_buffer = ""
 
     except StopIteration:
         pass
