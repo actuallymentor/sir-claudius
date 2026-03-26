@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.15.2] - 2026-03-26
+## [0.15.3] - 2026-03-26
 
 ### Fixed
 - worktree creation failure now exits immediately instead of continuing with broken state
