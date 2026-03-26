@@ -9,6 +9,8 @@ on:
     paths:
       - "Dockerfile"
       - "entrypoint.sh"
+      - "auto-accept.py"
+      - "statusline.sh"
       - ".github/workflows/publish.yml"
   workflow_dispatch:
 
