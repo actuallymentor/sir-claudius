@@ -23,6 +23,14 @@ Docker-based sandbox for running Claude Code. Key files: `Dockerfile`, `claudius
 
 Portable `statusline.sh` ships with the container image at `/usr/local/bin/statusline.sh`. The `claudius` script always creates a writable settings.json copy and rewrites the `statusLine.command` path to point to the container script. Usage tracking credentials (`CLAUDE_SESSION_KEY`, `CLAUDE_ORG_ID`) are extracted from `~/.claude/fetch-claude-usage.swift` or accepted as explicit env vars. First segment shows session modifiers (YOLO·WORKTREE·RESUME) via `CLAUDIUS_MODIFIERS` env var; defaults to "claudius" for plain sessions.
 
+## LOOP.md — Periodic Re-prompting (added 2026-03-26)
+
+Place a `LOOP.md` in the workspace to have Claude re-prompted when idle during autopilot sessions. First line parsed for interval (cron syntax, human-readable like "every 5 minutes", or defaults to 30 min). Remaining lines are the prompt typed into the PTY. Idle detection: 120s of no child output + no user input. Lives entirely in `auto-accept.py` — no changes to `claudius` or `entrypoint.sh`.
+
+## Autopilot tmux Wrapping (added 2026-03-26)
+
+`claudius autopilot` now re-executes inside a persistent tmux session using a dedicated server socket (`tmux -L claudius`). One session per directory (keyed by `pwd -P`, encoded to escape `.` and `:`). The script detects re-entry via `CLAUDIUS_IN_TMUX=1` env var. Key env vars are forwarded explicitly in the command string to handle stale tmux server environments. `claudius sessions` lists active sessions. Dead sessions are auto-cleaned on next run.
+
 ## Gotchas
 
 See `GOTCHAS.md` for accumulated pitfalls

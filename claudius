@@ -1,6 +1,10 @@
 #!/bin/bash
 set -e
 
+# Preserve original arguments before any parsing shifts them away.
+# Used by the tmux re-execution gate in autopilot mode.
+ORIGINAL_ARGS=("$@")
+
 # -----------------------------------------------------------
 # claudius — run Claude Code inside a Docker container
 # -----------------------------------------------------------
@@ -46,6 +50,7 @@ Standalone commands:
   worktree clean --merged  Remove metadata for already-merged worktrees
   worktree clean --stale   Review worktrees older than 30 days
   worktree clean --all     Merge and clean up all active worktrees
+  sessions               List active autopilot tmux sessions
 
 Options:
   --help, -h      Show this help message
@@ -54,12 +59,14 @@ Options:
 Examples:
   claudius                        Interactive session in the current directory
   claudius yolo                   Skip all permission prompts
-  claudius autopilot              Auto-accept plan approvals
-  claudius yolo autopilot         Full autonomy (skip permissions + auto-accept plans)
+  claudius autopilot              Auto-accept plan approvals (runs in tmux)
+  claudius yolo autopilot         Full autonomy (runs in tmux, close terminal to detach)
+  claudius sessions               List active autopilot tmux sessions (with attach commands)
   claudius mudbox                 Read-only workspace (code review, exploration)
   claudius worktree               Isolated worktree (parallel-safe)
   claudius worktree yolo          Isolated worktree + skip permissions
   claudius resume <id>            Resume a session (auto-detects worktree sessions)
+  claudius resume "/path/to/dir"  Reattach to an autopilot tmux session by path
   claudius yolo mudbox            Read-only workspace + skip permissions
   claudius sandbox yolo           No workspace + skip permissions
   claudius mudbox continue        Read-only workspace + resume last session
@@ -690,6 +697,85 @@ for entry, resume_cmd, wt_branch in zip(sorted_sessions, resume_cmds, wt_branche
 
 fi
 
+# ---- sessions subcommand: list active autopilot tmux sessions ----
+if [ "${1:-}" = "sessions" ]; then
+
+    if ! command -v tmux > /dev/null 2>&1; then
+        echo "Error: tmux is not installed." >&2
+        echo "  macOS:  brew install tmux" >&2
+        echo "  Linux:  sudo apt install tmux" >&2
+        exit 1
+    fi
+
+    _dim=$'\033[2m'
+    _rst=$'\033[0m'
+
+    # All autopilot sessions live on a dedicated tmux server socket.
+    # Only use session-level formats here — pane_dead is not available
+    # in list-sessions on all tmux versions.
+    raw=$(tmux -L claudius list-sessions -F \
+        '#{session_name}'$'\t''#{?session_attached,attached,detached}'$'\t''#{session_created}' \
+        2>/dev/null) || {
+        echo "No active Claudius autopilot sessions."
+        exit 0
+    }
+
+    _now=$(date +%s)
+    _count=0
+
+    echo ""
+    echo "----------------------------"
+    echo "Claudius autopilot sessions"
+    echo "----------------------------"
+
+    while IFS=$'\t' read -r name attached epoch; do
+        # Decode session name back to directory path
+        path="${name//__CLN__/:}"
+        path="${path//__DOT__/.}"
+
+        # Check pane status per-session (pane_dead is pane-level, not session-level)
+        pane_dead=$(tmux -L claudius list-panes -t "=$name" -F '#{pane_dead}' 2>/dev/null || echo "1")
+        if [ "$pane_dead" = "1" ]; then
+            status="exited"
+        else
+            status="running"
+        fi
+
+        # Format started timestamp and runtime
+        _started="" _runtime=""
+        if [ -n "$epoch" ]; then
+            _started=$(date -r "$epoch" '+%Y-%m-%d %H:%M' 2>/dev/null) || \
+            _started=$(date -d "@$epoch" '+%Y-%m-%d %H:%M' 2>/dev/null) || \
+            _started="$epoch"
+
+            _diff=$((_now - epoch))
+            _runtime=$(printf '%dd %02d:%02d' $((_diff/86400)) $(((_diff%86400)/3600)) $(((_diff%3600)/60)))
+        fi
+
+        # Session header: path with metadata
+        echo ""
+        if [ "$status" = "running" ] && [ "$attached" = "detached" ]; then
+            echo "  ${path}  ${_dim}(started ${_started}, runtime ${_runtime})${_rst}"
+            echo "    claudius resume \"${path}\""
+            echo "    ${_dim}tmux -L claudius attach -t \"${name}\"${_rst}"
+        elif [ "$status" = "running" ] && [ "$attached" = "attached" ]; then
+            echo "  ${path}  ${_dim}(started ${_started}, runtime ${_runtime}, attached)${_rst}"
+        else
+            echo "  ${path}  ${_dim}(${status}, started ${_started})${_rst}"
+        fi
+
+        _count=$((_count + 1))
+    done <<< "$raw"
+
+    if [ "$_count" -eq 0 ]; then
+        echo ""
+        echo "  No active sessions."
+    fi
+
+    echo ""
+    exit 0
+fi
+
 # ---- worktree list / clean subcommands ----
 if [ "${1:-}" = "worktree" ] && { [ "${2:-}" = "list" ] || [ "${2:-}" = "clean" ]; }; then
 
@@ -1125,6 +1211,130 @@ print(meta.get('gitDir', ''))
         fi
     fi
 
+fi
+
+# ---- resume by path: attach to an existing autopilot tmux session ----
+# When `claudius resume "/some/path"` is called with an absolute path,
+# treat it as an autopilot tmux session rather than a Claude session ID.
+# Strip stray quotes in case the user copy-pasted a quoted path literally.
+RESUME_NAME="${RESUME_NAME#\"}"
+RESUME_NAME="${RESUME_NAME%\"}"
+if [ "$RESUME" = true ] && [ -n "${RESUME_NAME:-}" ] && [[ "$RESUME_NAME" == /* ]]; then
+
+    if ! command -v tmux > /dev/null 2>&1; then
+        echo "Error: tmux is not installed." >&2
+        exit 1
+    fi
+
+    # Encode the path the same way autopilot does
+    _resume_session="${RESUME_NAME//\./__DOT__}"
+    _resume_session="${_resume_session//:/__CLN__}"
+
+    if ! tmux -L claudius has-session -t "=$_resume_session" 2>/dev/null; then
+        echo "No autopilot session found for: $RESUME_NAME" >&2
+        echo "Run 'claudius sessions' to see active sessions." >&2
+        exit 1
+    fi
+
+    _pane_dead=$(tmux -L claudius list-panes -t "=$_resume_session" -F '#{pane_dead}' 2>/dev/null || echo "1")
+    if [ "$_pane_dead" = "1" ]; then
+        echo "Autopilot session for $RESUME_NAME has finished." >&2
+        tmux -L claudius kill-session -t "=$_resume_session" 2>/dev/null || true
+        exit 0
+    fi
+
+    echo "Attaching to autopilot session for $RESUME_NAME" >&2
+    echo "Close terminal to detach, 'claudius sessions' to reattach later." >&2
+    exec tmux -L claudius attach-session -t "=$_resume_session"
+fi
+
+# ---- validate explicit resume session ID ----
+# When a non-path RESUME_NAME was given, verify it exists in history before
+# passing it to Claude. Otherwise the user gets a confusing picker UI.
+if [ "$RESUME" = true ] && [ -n "${RESUME_NAME:-}" ]; then
+    HOST_CLAUDE_DIR_VALIDATE="${HOST_CLAUDE_DIR_EARLY:-$HOME/.claude}"
+    _history_file="$HOST_CLAUDE_DIR_VALIDATE/history.jsonl"
+
+    if [ -f "$_history_file" ]; then
+        if ! grep -q "\"sessionId\":\"${RESUME_NAME}\"" "$_history_file"; then
+            echo "Error: no session found matching '$RESUME_NAME'" >&2
+            echo "Run 'claudius history' to see available sessions." >&2
+            exit 1
+        fi
+    fi
+fi
+
+# ---- tmux session wrapping for autopilot mode ----
+# When autopilot is active and we're not already inside a tmux session,
+# re-execute the entire script inside a persistent tmux session. This
+# lets the user close the terminal and the autopilot continues running.
+if [ "$AUTOPILOT" = true ] && [ -z "${CLAUDIUS_IN_TMUX:-}" ]; then
+
+    if ! command -v tmux > /dev/null 2>&1; then
+        echo "Error: tmux is required for autopilot mode. Install it with:" >&2
+        echo "  macOS:  brew install tmux" >&2
+        echo "  Linux:  sudo apt install tmux" >&2
+        exit 1
+    fi
+
+    # Encode the resolved working directory as a tmux-safe session name.
+    # Dots and colons have syntactic meaning in tmux target specs, so we
+    # escape them. Everything else (including slashes) is fine.
+    _tmux_pwd="$(pwd -P)"
+    _tmux_session="${_tmux_pwd//\./__DOT__}"
+    _tmux_session="${_tmux_session//:/__CLN__}"
+
+    # Guard against extremely long paths (tmux caps session names at ~256 chars)
+    if [ ${#_tmux_session} -gt 200 ]; then
+        if command -v shasum > /dev/null 2>&1; then
+            _path_hash=$(printf '%s' "$_tmux_pwd" | shasum -a 256 | cut -c1-16)
+        else
+            _path_hash=$(printf '%s' "$_tmux_pwd" | sha256sum | cut -c1-16)
+        fi
+        _tmux_session="$(basename "$_tmux_pwd")__${_path_hash}"
+    fi
+
+    # If a session already exists for this directory, attach or replace it
+    if tmux -L claudius has-session -t "=$_tmux_session" 2>/dev/null; then
+        _pane_dead=$(tmux -L claudius list-panes -t "=$_tmux_session" -F '#{pane_dead}' 2>/dev/null || echo "1")
+        if [ "$_pane_dead" = "1" ]; then
+            # Previous run finished — clean up and start fresh
+            echo "Previous autopilot session for this directory has finished." >&2
+            echo "Starting a new session..." >&2
+            tmux -L claudius kill-session -t "=$_tmux_session" 2>/dev/null || true
+        else
+            # Session is still running — attach to it
+            echo "Autopilot session already running for $_tmux_pwd" >&2
+            echo "Attaching... (close terminal to detach, 'claudius sessions' to reattach later)" >&2
+            exec tmux -L claudius attach-session -t "=$_tmux_session"
+        fi
+    fi
+
+    # Resolve the path to this script for re-execution
+    case "$0" in
+        */*) _tmux_self="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")" ;;
+        *)   _tmux_self="$(command -v "$0")" ;;
+    esac
+
+    # Forward key environment variables explicitly in the command string.
+    # When the tmux server is already running from a prior session, new
+    # sessions inherit the server's original env — not the caller's. This
+    # ensures fresh values reach the re-exec.
+    _tmux_cmd="env CLAUDIUS_IN_TMUX=1"
+    for _var in ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN CLAUDE_MODEL \
+                CLAUDE_SANDBOX_IMAGE CLAUDE_SESSION_KEY CLAUDE_ORG_ID \
+                CLAUDIUS_DIR CLAUDIUS_NPM_ISOLATE GH_TOKEN; do
+        eval "_val=\${${_var}:-}"
+        [ -n "$_val" ] && _tmux_cmd="$_tmux_cmd ${_var}=$(printf '%q' "$_val")"
+    done
+    _tmux_cmd="$_tmux_cmd $(printf '%q ' "$_tmux_self" "${ORIGINAL_ARGS[@]}")"
+
+    # Create a detached tmux session running the full claudius pipeline
+    tmux -L claudius new-session -d -s "$_tmux_session" "$_tmux_cmd"
+
+    echo "Autopilot session started for $_tmux_pwd" >&2
+    echo "Attaching... (close terminal to detach, 'claudius sessions' to reattach later)" >&2
+    exec tmux -L claudius attach-session -t "=$_tmux_session"
 fi
 
 # ---- stale worktree warning (once per day) ----
