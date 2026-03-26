@@ -1953,6 +1953,34 @@ if [ "$WORKTREE" = true ]; then
     docker_flags+=( -e "CLAUDIUS_WORKTREE_ORIGINAL_BRANCH=$WORKTREE_ORIGINAL_BRANCH" )
 fi
 
+# Detect LOOP.md and parse the interval for the statusline
+# Only relevant in autopilot mode with a mounted workspace
+LOOP_INTERVAL=""
+if [ "$AUTOPILOT" = true ] && [ "$SANDBOX" = false ]; then
+    _loop_file="$(pwd)/LOOP.md"
+    [ "$WORKTREE" = true ] && [ -n "${WORKTREE_DIR:-}" ] && _loop_file="$WORKTREE_DIR/LOOP.md"
+    if [ -f "$_loop_file" ] && [ -s "$_loop_file" ]; then
+        LOOP_INTERVAL=$(python3 -c "
+import re, sys
+line = open(sys.argv[1]).readline().strip()
+# Cron: */N * * * * → N minutes
+fields = line.split()
+if len(fields) >= 5 and all(re.match(r'^[\d\*/,-]+$', f) for f in fields[:5]):
+    m = re.match(r'^\*/(\d+)$', fields[0])
+    if m: print(int(m.group(1)) * 60); sys.exit()
+    m = re.match(r'^\*/(\d+)$', fields[1])
+    if m: print(int(m.group(1)) * 3600); sys.exit()
+# Human-readable: 10 minutes, 4 hours, 30 seconds
+m = re.search(r'(\d+)\s*(s(?:ec(?:ond)?)?|m(?:in(?:ute)?)?|h(?:(?:ou)?r)?|d(?:ay)?)s?', line, re.I)
+if m:
+    v, u = int(m.group(1)), m.group(2)[0].lower()
+    print(v * {'s':1,'m':60,'h':3600,'d':86400}[u]); sys.exit()
+print(1800)
+" "$_loop_file" 2>/dev/null || echo "1800")
+        docker_flags+=( -e "CLAUDIUS_LOOP_INTERVAL=$LOOP_INTERVAL" )
+    fi
+fi
+
 # Build a human-readable modifiers string for the statusline
 _mods=""
 [ "$YOLO" = true ] && _mods="${_mods:+$_mods }yolo"
