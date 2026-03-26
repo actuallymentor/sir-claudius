@@ -9,7 +9,7 @@ ORIGINAL_ARGS=("$@")
 # claudius — run Claude Code inside a Docker container
 # -----------------------------------------------------------
 
-CLAUDIUS_VERSION="0.15.1"
+CLAUDIUS_VERSION="0.15.2"
 REPO_URL="https://raw.githubusercontent.com/actuallymentor/sir-claudius/main/claudius?cachebust=$(date +%s)"
 
 IMAGE="${CLAUDE_SANDBOX_IMAGE:-actuallymentor/sir-claudius:latest}"
@@ -33,6 +33,7 @@ Usage: claudius [command...] [options] [-- claude args...]
 Commands (chainable — combine in any order):
   yolo        Run with blanket permissions (--dangerously-skip-permissions)
   autopilot   Auto-accept plan approval prompts (combine with yolo for full autonomy)
+              Create a LOOP.md in your project to re-prompt Claude periodically when idle
   sandbox     Run without mounting a workspace; host files are read-only
   mudbox      Mount the workspace as read-only (explore code without modifying it)
   worktree    Create an isolated git worktree (parallel sessions, resumable)
@@ -132,7 +133,7 @@ if [ "${1:-}" = "update" ]; then
     # Download the latest script from GitHub
     echo "Fetching latest claudius from GitHub..." >&2
     TEMP_FILE=$(mktemp)
-    trap "rm -f $TEMP_FILE" EXIT INT TERM
+    trap 'rm -f "$TEMP_FILE"' EXIT INT TERM
 
     if ! curl -fsSL --max-time 30 "$REPO_URL" -o "$TEMP_FILE"; then
         echo "Error: failed to download from $REPO_URL" >&2
@@ -1388,6 +1389,7 @@ print(count)
 fi
 
 # ---- check for updates (non-blocking, 5s timeout) ----
+UPDATE_NOTICE_FILE=$(mktemp)
 check_for_update() {
     local remote_version
     remote_version=$(curl -fsSL --max-time 5 \
@@ -1395,10 +1397,12 @@ check_for_update() {
         | grep -m1 '^CLAUDIUS_VERSION=' | cut -d'"' -f2)
 
     if [ -n "$remote_version" ] && [ "$remote_version" != "$CLAUDIUS_VERSION" ]; then
-        echo "claudius $CLAUDIUS_VERSION → $remote_version available. Run: claudius update" >&2
+        # Write to temp file instead of stderr to avoid interleaving with interactive prompts
+        printf 'claudius %s → %s available. Run: claudius update\n' "$CLAUDIUS_VERSION" "$remote_version" > "$UPDATE_NOTICE_FILE"
     fi
 }
 check_for_update &
+disown $!
 
 # ---- resolve authentication ----
 # Priority: env var > host Claude CLI credentials file > token file > API key
@@ -1500,7 +1504,12 @@ if [ -z "$OAUTH_TOKEN" ] && [ "$HAS_HOST_CREDS" = true ]; then
                 while true; do
                     sleep 300
                     fresh=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null || true)
-                    [ -n "$fresh" ] && printf '%s' "$fresh" > "$CREDS_TMPFILE"
+                    if [ -n "$fresh" ]; then
+                        # Atomic write: temp file + mv prevents readers from seeing truncated JSON
+                        _fresh_tmp=$(mktemp)
+                        printf '%s' "$fresh" > "$_fresh_tmp"
+                        mv "$_fresh_tmp" "$CREDS_TMPFILE"
+                    fi
                 done
             ) &
             CRED_SYNC_PID=$!
@@ -1580,7 +1589,10 @@ if [ "$WORKTREE" = true ] && [ "$WORKTREE_RESUMING" != true ]; then
 
     # Create the worktree
     echo "Creating worktree: $WORKTREE_BRANCH" >&2
-    git worktree add -b "$WORKTREE_BRANCH" "$WORKTREE_DIR" HEAD --quiet
+    if ! git worktree add -b "$WORKTREE_BRANCH" "$WORKTREE_DIR" HEAD --quiet; then
+        echo "Error: failed to create worktree (branch or directory may already exist)" >&2
+        exit 1
+    fi
 
     echo "Worktree ready at $WORKTREE_DIR (branch: $WORKTREE_BRANCH)" >&2
 
@@ -2034,6 +2046,7 @@ cleanup() {
     [ -n "$CLAUDE_JSON_TMPFILE" ] && rm -f "$CLAUDE_JSON_TMPFILE"
     [ -n "$SETTINGS_TMPFILE" ] && rm -f "$SETTINGS_TMPFILE"
     [ -n "$CREDS_TMPFILE" ] && rm -f "$CREDS_TMPFILE"
+    [ -n "$UPDATE_NOTICE_FILE" ] && rm -f "$UPDATE_NOTICE_FILE"
     [ -n "$WORKTREE_DOTGIT_TMPFILE" ] && rm -f "$WORKTREE_DOTGIT_TMPFILE"
     [ -n "$WORKTREE_GITDIR_TMPFILE" ] && rm -f "$WORKTREE_GITDIR_TMPFILE"
 
@@ -2060,6 +2073,11 @@ fi
 
 docker run "${docker_flags[@]}" "$IMAGE" claude "${claude_flags[@]}" "$@"
 exit_code=$?
+
+# Show deferred update notice (background check wrote to temp file to avoid interleaving)
+if [ -s "$UPDATE_NOTICE_FILE" ]; then
+    cat "$UPDATE_NOTICE_FILE" >&2
+fi
 
 # ---- worktree post-exit: merge or keep ----
 WORKTREE_KEPT=false
@@ -2108,11 +2126,12 @@ if [ "$WORKTREE" = true ]; then
 
                 # Pre-flight: ensure we're on the original branch and working tree is clean
                 current_branch=$(git symbolic-ref --short HEAD 2>/dev/null || true)
-                worktree_dirty=$(git diff --quiet 2>/dev/null && git diff --cached --quiet 2>/dev/null; echo $?)
+                # $? is 0 when both diffs are clean (no changes), nonzero when dirty
+                worktree_clean=$(git diff --quiet 2>/dev/null && git diff --cached --quiet 2>/dev/null; echo $?)
 
                 merge_ok=false
 
-                if [ "$worktree_dirty" != "0" ]; then
+                if [ "$worktree_clean" != "0" ]; then
                     echo "Warning: working tree is dirty — skipping auto-merge." >&2
                 elif [ "$current_branch" != "$WORKTREE_ORIGINAL_BRANCH" ]; then
                     echo "Warning: no longer on $WORKTREE_ORIGINAL_BRANCH (now on $current_branch) — skipping auto-merge." >&2

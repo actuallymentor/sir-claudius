@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.15.2] - 2026-03-26
+
+### Fixed
+- worktree creation failure now exits immediately instead of continuing with broken state
+- credential sync daemon writes are now atomic (temp file + mv) to prevent truncated reads
+- background update check no longer interleaves output with interactive prompts
+- unquoted temp file path in update subcommand trap
+
+### Changed
+- document LOOP.md periodic re-prompting feature (autopilot mode)
+- fix README claiming worktree is incompatible with continue/resume (they work fine)
+- clarify sandbox "no changes escape" — session metadata and caches persist on host
+
 ## [0.15.1] - 2026-03-24
 
 ### Fixed

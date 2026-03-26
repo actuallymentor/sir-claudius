@@ -96,7 +96,7 @@ In sandbox mode:
 - `/workspace` is an empty, container-local directory
 - Host config files (`~/.claude.json`, settings, session history) are mounted **read-only**
 - Named volumes (npm/uv caches) still work so MCP servers function normally
-- No changes can escape the container
+- No changes to your project files can escape the container (session metadata and package caches are stored on the host)
 
 ## Mudbox mode
 
@@ -138,7 +138,7 @@ On exit, claudius automatically:
 2. **Creates a merge commit** if fast-forward isn't possible but merge succeeds
 3. **Preserves the branch** if there are conflicts, and offers to push it to the remote
 
-Worktree mode is incompatible with `sandbox`, `mudbox`, `continue`, and `resume`.
+Worktree mode is incompatible with `sandbox` and `mudbox`. When resuming, worktree sessions are auto-detected — `claudius resume <id>` re-enters the worktree automatically.
 
 Worktrees are stored in `$CLAUDIUS_DIR/worktrees/` (default: `~/.claudius/worktrees/`) and cleaned up automatically after a successful merge.
 
@@ -154,6 +154,25 @@ claudius yolo resume          # skip permissions + pick a session to resume
 ```
 
 If both `sandbox` and `mudbox` are specified, `mudbox` takes priority (you get a read-only workspace rather than no workspace).
+
+## Periodic re-prompting (LOOP.md)
+
+In autopilot mode, you can create a `LOOP.md` file in your project directory to periodically re-prompt Claude when it goes idle. This is useful for long-running tasks where you want Claude to keep working on a recurring basis.
+
+```sh
+# Create a LOOP.md in your project root
+echo "Check for new issues and fix them" > LOOP.md
+
+# Start autopilot — LOOP.md is picked up automatically
+claudius autopilot yolo
+```
+
+The first line of `LOOP.md` can optionally specify an interval:
+- Cron syntax: `*/5 * * * *` (every 5 minutes)
+- Human-readable: `10 minutes`, `4 hours`, `30 seconds`
+- If omitted, defaults to **30 minutes**
+
+The rest of the file is the prompt text sent to Claude. Re-prompting only triggers when Claude has been idle for at least 2 minutes and no user input has occurred.
 
 ## Authentication priority
 
