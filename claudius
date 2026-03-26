@@ -1112,7 +1112,13 @@ while [ $# -gt 0 ]; do
                 esac
             fi
             ;;
-        *)  break ;;
+        --)  shift; break ;;  # explicit separator → rest is for Claude
+        -*)  break ;;         # flags like -p, --output-format → pass through to Claude
+        *)
+            echo "Unknown command: $1" >&2
+            echo "Run 'claudius --help' for usage." >&2
+            exit 1
+            ;;
     esac
 done
 
