@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.16.0] - 2026-03-27
+
+### Added
+- enable tmux mouse support by default in autopilot sessions (82ddff5)
+
 ## [0.15.3] - 2026-03-26
 
 ### Fixed

@@ -9,7 +9,7 @@ ORIGINAL_ARGS=("$@")
 # claudius — run Claude Code inside a Docker container
 # -----------------------------------------------------------
 
-CLAUDIUS_VERSION="0.15.3"
+CLAUDIUS_VERSION="0.16.0"
 REPO_URL="https://raw.githubusercontent.com/actuallymentor/sir-claudius/main/claudius?cachebust=$(date +%s)"
 
 IMAGE="${CLAUDE_SANDBOX_IMAGE:-actuallymentor/sir-claudius:latest}"
@@ -1338,6 +1338,9 @@ if [ "$AUTOPILOT" = true ] && [ -z "${CLAUDIUS_IN_TMUX:-}" ]; then
 
     # Create a detached tmux session running the full claudius pipeline
     tmux -L claudius new-session -d -s "$_tmux_session" "$_tmux_cmd"
+
+    # Enable mouse support (scrolling, pane selection, resizing) by default
+    tmux -L claudius set -g mouse on 2>/dev/null || true
 
     echo "Autopilot session started for $_tmux_pwd" >&2
     echo "Attaching... (close terminal to detach, 'claudius sessions' to reattach later)" >&2
