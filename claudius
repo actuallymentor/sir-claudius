@@ -1339,8 +1339,9 @@ if [ "$AUTOPILOT" = true ] && [ -z "${CLAUDIUS_IN_TMUX:-}" ]; then
     # Create a detached tmux session running the full claudius pipeline
     tmux -L claudius new-session -d -s "$_tmux_session" "$_tmux_cmd"
 
-    # Enable mouse support (scrolling, pane selection, resizing) by default
+    # Enable mouse support and generous scrollback for autopilot sessions
     tmux -L claudius set -g mouse on 2>/dev/null || true
+    tmux -L claudius set -g history-limit 10000 2>/dev/null || true
 
     echo "Autopilot session started for $_tmux_pwd" >&2
     echo "Attaching... (close terminal to detach, 'claudius sessions' to reattach later)" >&2

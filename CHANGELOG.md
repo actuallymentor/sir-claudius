@@ -4,6 +4,7 @@
 
 ### Added
 - enable tmux mouse support by default in autopilot sessions (82ddff5)
+- increase tmux scrollback history to 10k lines in autopilot sessions (4ea088c)
 
 ## [0.15.3] - 2026-03-26
 
