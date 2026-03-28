@@ -9,7 +9,7 @@ ORIGINAL_ARGS=("$@")
 # claudius — run Claude Code inside a Docker container
 # -----------------------------------------------------------
 
-CLAUDIUS_VERSION="0.16.0"
+CLAUDIUS_VERSION="0.17.0"
 REPO_URL="https://raw.githubusercontent.com/actuallymentor/sir-claudius/main/claudius?cachebust=$(date +%s)"
 
 IMAGE="${CLAUDE_SANDBOX_IMAGE:-actuallymentor/sir-claudius:latest}"
@@ -31,9 +31,9 @@ claudius — run Claude Code inside a Docker container
 Usage: claudius [command...] [options] [-- claude args...]
 
 Commands (chainable — combine in any order):
-  yolo        Run with blanket permissions (--dangerously-skip-permissions)
-  autopilot   Auto-accept plan approval prompts (combine with yolo for full autonomy)
-              Create a LOOP.md in your project to re-prompt Claude periodically when idle
+  yolo        Run with blanket permissions and auto-accept plans (30s review window)
+  autopilot   Run in a persistent tmux session (close terminal to detach)
+  loop        Re-prompt Claude when idle (reads LOOP.md, or pass a prompt string)
   sandbox     Run without mounting a workspace; host files are read-only
   mudbox      Mount the workspace as read-only (explore code without modifying it)
   worktree    Create an isolated git worktree (parallel sessions, resumable)
@@ -58,26 +58,29 @@ Options:
   --version, -v   Show the claudius version
 
 Examples:
-  claudius                        Interactive session in the current directory
-  claudius yolo                   Skip all permission prompts
-  claudius autopilot              Auto-accept plan approvals (runs in tmux)
-  claudius yolo autopilot         Full autonomy (runs in tmux, close terminal to detach)
-  claudius sessions               List active autopilot tmux sessions (with attach commands)
-  claudius mudbox                 Read-only workspace (code review, exploration)
-  claudius worktree               Isolated worktree (parallel-safe)
-  claudius worktree yolo          Isolated worktree + skip permissions
-  claudius resume <id>            Resume a session (auto-detects worktree sessions)
-  claudius resume "/path/to/dir"  Reattach to an autopilot tmux session by path
-  claudius yolo mudbox            Read-only workspace + skip permissions
-  claudius sandbox yolo           No workspace + skip permissions
-  claudius mudbox continue        Read-only workspace + resume last session
-  claudius history                Show the 15 most recent sessions
-  claudius history 50             Show the 50 most recent sessions
-  claudius history all            Show all sessions
-  claudius history "npm issue"    Search sessions by description (case-insensitive)
-  claudius history inspect <id>   Inspect a session's full conversation log
-  claudius worktree list          List active worktrees
-  claudius worktree clean <id>    Clean up a specific worktree
+  claudius                          Interactive session in the current directory
+  claudius yolo                     Skip permissions + auto-accept plans (30s review)
+  claudius autopilot                Persistent tmux session (close terminal to detach)
+  claudius yolo autopilot           Full autonomy in tmux
+  claudius loop                     Re-prompt from LOOP.md when idle
+  claudius loop "check for errors"  Re-prompt with custom string every 30 minutes
+  claudius yolo autopilot loop      Full autonomy in tmux with periodic re-prompting
+  claudius sessions                 List active autopilot tmux sessions (with attach commands)
+  claudius mudbox                   Read-only workspace (code review, exploration)
+  claudius worktree                 Isolated worktree (parallel-safe)
+  claudius worktree yolo            Isolated worktree + skip permissions
+  claudius resume <id>              Resume a session (auto-detects worktree sessions)
+  claudius resume "/path/to/dir"    Reattach to an autopilot tmux session by path
+  claudius yolo mudbox              Read-only workspace + skip permissions
+  claudius sandbox yolo             No workspace + skip permissions
+  claudius mudbox continue          Read-only workspace + resume last session
+  claudius history                  Show the 15 most recent sessions
+  claudius history 50               Show the 50 most recent sessions
+  claudius history all              Show all sessions
+  claudius history "npm issue"      Search sessions by description (case-insensitive)
+  claudius history inspect <id>     Inspect a session's full conversation log
+  claudius worktree list            List active worktrees
+  claudius worktree clean <id>      Clean up a specific worktree
 
 Environment variables:
   CLAUDE_SANDBOX_IMAGE   Docker image to use (default: actuallymentor/sir-claudius:latest)
@@ -1087,6 +1090,8 @@ fi
 # combined in any order: claudius yolo mudbox, claudius sandbox continue, etc.
 YOLO=false
 AUTOPILOT=false
+LOOP=false
+LOOP_PROMPT=""
 SANDBOX=false
 MUDBOX=false
 WORKTREE=false
@@ -1098,6 +1103,16 @@ while [ $# -gt 0 ]; do
     case "$1" in
         yolo)      YOLO=true; shift ;;
         autopilot) AUTOPILOT=true; shift ;;
+        loop)
+            LOOP=true; shift
+            # Next non-flag, non-modifier argument is the loop prompt
+            if [ $# -gt 0 ] && [[ "${1:-}" != -* ]]; then
+                case "$1" in
+                    yolo|autopilot|loop|sandbox|mudbox|worktree|continue|resume) ;;
+                    *) LOOP_PROMPT="$1"; shift ;;
+                esac
+            fi
+            ;;
         sandbox)   SANDBOX=true; shift ;;
         mudbox)    MUDBOX=true; shift ;;
         worktree)  WORKTREE=true; shift ;;
@@ -1107,7 +1122,7 @@ while [ $# -gt 0 ]; do
             # Next non-flag, non-subcommand argument is the session name
             if [ $# -gt 0 ] && [[ "${1:-}" != -* ]]; then
                 case "$1" in
-                    yolo|autopilot|sandbox|mudbox|worktree|continue|resume) ;;
+                    yolo|autopilot|loop|sandbox|mudbox|worktree|continue|resume) ;;
                     *) RESUME_NAME="$1"; shift ;;
                 esac
             fi
@@ -1940,14 +1955,24 @@ else
     docker_flags+=( -e "AGENT_AUTONOMY_MODE=regular" )
 fi
 
-# Expose autopilot flag for the entrypoint (controls auto-accept.py)
+# Expose autopilot flag (tmux management only — no longer gates auto-accept.py)
 if [ "$AUTOPILOT" = true ]; then
     docker_flags+=( -e "CLAUDIUS_AUTOPILOT=1" )
+
+    # Backward-compat notice: autopilot no longer auto-accepts plans
+    if [ "$YOLO" = false ]; then
+        echo "Note: autopilot now only manages tmux. Add 'yolo' for plan auto-acceptance." >&2
+    fi
 fi
 
-# Expose yolo flag so auto-accept.py knows to handle permission prompts too
+# Expose yolo flag — gates plan/permission auto-acceptance in auto-accept.py
 if [ "$YOLO" = true ]; then
     docker_flags+=( -e "CLAUDIUS_YOLO=1" )
+fi
+
+# Expose loop flag — gates periodic re-prompting in auto-accept.py
+if [ "$LOOP" = true ]; then
+    docker_flags+=( -e "CLAUDIUS_LOOP=1" )
 fi
 
 # Expose worktree info inside the container
@@ -1957,14 +1982,22 @@ if [ "$WORKTREE" = true ]; then
     docker_flags+=( -e "CLAUDIUS_WORKTREE_ORIGINAL_BRANCH=$WORKTREE_ORIGINAL_BRANCH" )
 fi
 
-# Detect LOOP.md and parse the interval for the statusline
-# Only relevant in autopilot mode with a mounted workspace
+# Detect loop prompt source and parse the interval for the statusline
 LOOP_INTERVAL=""
-if [ "$AUTOPILOT" = true ] && [ "$SANDBOX" = false ]; then
-    _loop_file="$(pwd)/LOOP.md"
-    [ "$WORKTREE" = true ] && [ -n "${WORKTREE_DIR:-}" ] && _loop_file="$WORKTREE_DIR/LOOP.md"
-    if [ -f "$_loop_file" ] && [ -s "$_loop_file" ]; then
-        LOOP_INTERVAL=$(python3 -c "
+if [ "$LOOP" = true ] && [ "$SANDBOX" = false ]; then
+    if [ -n "$LOOP_PROMPT" ]; then
+        # Inline prompt — use default 30-minute interval
+        LOOP_INTERVAL=1800
+        docker_flags+=( -e "CLAUDIUS_LOOP_INTERVAL=$LOOP_INTERVAL" )
+        docker_flags+=( -e "CLAUDIUS_LOOP_PROMPT=$LOOP_PROMPT" )
+    else
+        # Find LOOP.md case-insensitively
+        _loop_dir="$(pwd)"
+        [ "$WORKTREE" = true ] && [ -n "${WORKTREE_DIR:-}" ] && _loop_dir="$WORKTREE_DIR"
+        _loop_file=$(find "$_loop_dir" -maxdepth 1 -iname "loop.md" -print -quit 2>/dev/null)
+
+        if [ -n "$_loop_file" ] && [ -s "$_loop_file" ]; then
+            LOOP_INTERVAL=$(python3 -c "
 import re, sys
 line = open(sys.argv[1]).readline().strip()
 # Cron: */N * * * * → N minutes
@@ -1981,7 +2014,10 @@ if m:
     print(v * {'s':1,'m':60,'h':3600,'d':86400}[u]); sys.exit()
 print(1800)
 " "$_loop_file" 2>/dev/null || echo "1800")
-        docker_flags+=( -e "CLAUDIUS_LOOP_INTERVAL=$LOOP_INTERVAL" )
+            docker_flags+=( -e "CLAUDIUS_LOOP_INTERVAL=$LOOP_INTERVAL" )
+        else
+            echo "Warning: loop modifier active but no LOOP.md found. Loop re-prompting will be inactive." >&2
+        fi
     fi
 fi
 
@@ -1989,6 +2025,7 @@ fi
 _mods=""
 [ "$YOLO" = true ] && _mods="${_mods:+$_mods }yolo"
 [ "$AUTOPILOT" = true ] && _mods="${_mods:+$_mods }autopilot"
+[ "$LOOP" = true ] && _mods="${_mods:+$_mods }loop"
 [ "$MUDBOX" = true ] && _mods="${_mods:+$_mods }mudbox"
 [ "$SANDBOX" = true ] && _mods="${_mods:+$_mods }sandbox"
 [ "$WORKTREE" = true ] && _mods="${_mods:+$_mods }worktree"
@@ -2075,11 +2112,48 @@ if ! docker image inspect "$IMAGE" > /dev/null 2>&1; then
 
 fi
 
+# ---- notification FIFO for yolo plan alerts ----
+# When yolo is active, mount a named pipe into the container so
+# auto-accept.py can signal the host to send OS notifications.
+NOTIFY_FIFO=""
+NOTIFY_WATCHER_PID=""
+
+if [ "$YOLO" = true ]; then
+    NOTIFY_FIFO=$(mktemp -u)
+    mkfifo "$NOTIFY_FIFO"
+    chmod 600 "$NOTIFY_FIFO"
+    docker_flags+=( -v "$NOTIFY_FIFO:/tmp/claudius-notify" )
+
+    # Background watcher: reads lines from the FIFO and sends OS notifications
+    (
+        while IFS= read -r _notify_line <"$NOTIFY_FIFO" 2>/dev/null; do
+            [ -z "$_notify_line" ] && continue
+
+            # Universal: terminal bell
+            printf '\a' 2>/dev/null
+
+            # macOS: native notification centre
+            if command -v osascript > /dev/null 2>&1; then
+                osascript -e "display notification \"$_notify_line\" with title \"Claudius\"" 2>/dev/null || true
+            # Linux: freedesktop notification
+            elif command -v notify-send > /dev/null 2>&1; then
+                notify-send "Claudius" "$_notify_line" 2>/dev/null || true
+            fi
+        done
+    ) &
+    NOTIFY_WATCHER_PID=$!
+    disown "$NOTIFY_WATCHER_PID"
+fi
+
 # ---- clean up temporary files on exit ----
 cleanup() {
     # Stop the macOS credential sync daemon if running.
     # The process was disowned at launch, so no "Terminated" job message.
     [ -n "$CRED_SYNC_PID" ] && kill "$CRED_SYNC_PID" 2>/dev/null || true
+
+    # Stop the notification watcher and remove the FIFO
+    [ -n "$NOTIFY_WATCHER_PID" ] && kill "$NOTIFY_WATCHER_PID" 2>/dev/null || true
+    [ -n "$NOTIFY_FIFO" ] && rm -f "$NOTIFY_FIFO"
 
     [ -n "$CLAUDE_JSON_TMPFILE" ] && rm -f "$CLAUDE_JSON_TMPFILE"
     [ -n "$SETTINGS_TMPFILE" ] && rm -f "$SETTINGS_TMPFILE"
@@ -2248,6 +2322,7 @@ if [ -f "$HISTORY_FILE" ]; then
             modifiers=""
             [ "$YOLO" = true ] && modifiers="$modifiers yolo"
             [ "$AUTOPILOT" = true ] && modifiers="$modifiers autopilot"
+            [ "$LOOP" = true ] && modifiers="$modifiers loop"
             [ "$SANDBOX" = true ] && modifiers="$modifiers sandbox"
             [ "$MUDBOX" = true ] && modifiers="$modifiers mudbox"
             # Worktree modifier includes the ID for reverse lookup

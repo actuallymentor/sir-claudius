@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.17.0] - 2026-03-28
+
+### Added
+- `loop` modifier — re-prompt Claude when idle from LOOP.md or inline string
+- system notifications on plan detection (macOS osascript, Linux notify-send, terminal bell)
+- case-insensitive LOOP.md file detection
+
+### Changed
+- `yolo` now auto-accepts plans with 30s review window (was 10s, previously required autopilot)
+- `autopilot` only manages tmux sessions — no longer controls plan acceptance or loop
+- `loop` replaces autopilot's LOOP.md handling as a standalone modifier
+
+### Breaking
+- `claudius autopilot` no longer auto-accepts plans — use `claudius yolo autopilot`
+- `claudius autopilot` no longer handles LOOP.md — use `claudius autopilot loop`
+
 ## [0.16.0] - 2026-03-27
 
 ### Added

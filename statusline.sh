@@ -52,13 +52,15 @@ if [ "$show_modifiers" = "1" ]; then
             mod_display="${mod_display:+${mod_display}·}${m}"
         done
 
-        # Append LOOP.md interval as "loop hh:mm:ss" if detected
+        # Append interval after "loop" modifier as hh:mm:ss if detected
         if [ -n "${CLAUDIUS_LOOP_INTERVAL:-}" ]; then
             _li=$CLAUDIUS_LOOP_INTERVAL
             _lh=$(( _li / 3600 ))
             _lm=$(( (_li % 3600) / 60 ))
             _ls=$(( _li % 60 ))
-            mod_display="${mod_display}·loop $(printf '%02d:%02d:%02d' $_lh $_lm $_ls)"
+            _li_fmt=$(printf '%02d:%02d:%02d' $_lh $_lm $_ls)
+            # Replace "loop" with "loop hh:mm:ss" in the display
+            mod_display="${mod_display/loop/loop ${_li_fmt}}"
         fi
 
         modifiers_text="${MAGENTA}${mod_display}${RESET}"

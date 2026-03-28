@@ -15,10 +15,9 @@ if [ "${CLAUDIUS_NM_ISOLATED:-0}" = "1" ] && [ -d /workspace/node_modules ]; the
     sudo chown -R node:node /workspace/node_modules 2>/dev/null || true
 fi
 
-# In autopilot mode, wrap the command through auto-accept.py so plan mode
-# approval prompts are accepted automatically. Yolo alone no longer triggers
-# this — use "claudius yolo autopilot" for full autonomy.
-if [ "${CLAUDIUS_AUTOPILOT:-}" = "1" ]; then
+# Wrap through auto-accept.py when yolo (plan auto-accept) or loop
+# (periodic re-prompting) is active. Autopilot only manages tmux.
+if [ "${CLAUDIUS_YOLO:-}" = "1" ] || [ "${CLAUDIUS_LOOP:-}" = "1" ]; then
     exec python3 /usr/local/bin/auto-accept.py "$@"
 else
     exec "$@"

@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """
-PTY wrapper that auto-accepts prompts in Claude Code.
+PTY wrapper that auto-accepts prompts and re-prompts Claude Code.
 
-Used by the "autopilot" modifier to auto-accept plan approval prompts.
-When CLAUDIUS_YOLO=1 is also set, permission bypass prompts are accepted too.
+Used by the "yolo" modifier to auto-accept plan approval and permission prompts.
+Used by the "loop" modifier to periodically re-prompt Claude when idle.
 
 All I/O passes through transparently. The user can still type normally.
 During the accept delay, keystrokes cancel auto-accept and forward to the child.
 """
 
+import glob
 import os
 import sys
 import pty
@@ -43,14 +44,14 @@ log = logging.getLogger("auto-accept")
 # On match, we wait briefly for the TUI to redraw, then send the
 # appropriate keystroke to accept.
 
-# Plan approval triggers — always active in autopilot mode.
+# Plan approval triggers — active when CLAUDIUS_YOLO=1.
 # Shift+Tab is bound to "yes-accept-edits" in the plan component.
 # (Enter rejects the plan in the current Claude Code UI.)
 PLAN_TRIGGERS = [
     "needs your approval",
 ]
 
-# Permission bypass triggers — only active when CLAUDIUS_YOLO=1.
+# Permission bypass triggers — also active when CLAUDIUS_YOLO=1.
 # These accept via Enter (the desired option is already highlighted).
 YOLO_TRIGGERS = [
     "Yes, and bypass permissions",
@@ -58,7 +59,10 @@ YOLO_TRIGGERS = [
 ]
 
 YOLO_MODE = os.environ.get("CLAUDIUS_YOLO", "0") == "1"
-ALL_TRIGGERS = PLAN_TRIGGERS + (YOLO_TRIGGERS if YOLO_MODE else [])
+LOOP_MODE = os.environ.get("CLAUDIUS_LOOP", "0") == "1"
+
+# Triggers only fire in yolo mode. Loop-only mode does no auto-accepting.
+ALL_TRIGGERS = (PLAN_TRIGGERS + YOLO_TRIGGERS) if YOLO_MODE else []
 
 # Compiled regex to strip ANSI escape sequences before matching.
 # Covers CSI sequences (with optional ? prefix), OSC sequences, and
@@ -80,16 +84,38 @@ CURSOR_FWD_RE = re.compile(r"\x1b\[\d*C")
 REDRAW_DELAY = 0.5
 
 # Seconds to wait before auto-accepting. Gives the user time to review
-# the plan and intervene if needed.
-ACCEPT_DELAY = 10
+# the plan and intervene if needed. A system notification is sent at
+# trigger time so the user has the full window to react.
+ACCEPT_DELAY = 30
 
 # Minimum seconds between consecutive auto-accepts (debounce).
 # Prevents double-firing when the same prompt text appears in the redraw.
 DEBOUNCE_INTERVAL = 3.0
 
-# ─── LOOP.md — periodic re-prompting ────────────────────────────────
-# When /workspace/LOOP.md exists, auto-accept will periodically type
-# its contents into the Claude terminal when Claude goes idle.
+# ─── Notification ───────────────────────────────────────────────────
+# Writes to a host-mounted FIFO so the claudius host script can send
+# OS-level notifications (osascript on macOS, notify-send on Linux).
+
+NOTIFY_FIFO = "/tmp/claudius-notify"
+
+
+def send_notification(message):
+    """Write a notification line to the host-mounted FIFO (non-blocking)."""
+    try:
+        fd = os.open(NOTIFY_FIFO, os.O_WRONLY | os.O_NONBLOCK)
+        try:
+            os.write(fd, (message + "\n").encode("utf-8"))
+        finally:
+            os.close(fd)
+    except OSError:
+        pass  # no reader, FIFO missing, or not mounted — silently skip
+
+
+# ─── LOOP — periodic re-prompting ──────────────────────────────────
+# When the "loop" modifier is active, auto-accept will periodically
+# type a prompt into the Claude terminal when Claude goes idle.
+# The prompt comes from either CLAUDIUS_LOOP_PROMPT env var or a
+# LOOP.md file in /workspace (case-insensitive).
 
 LOOP_FILE = "/workspace/LOOP.md"
 LOOP_IDLE_THRESHOLD = 120    # seconds of output silence → Claude is idle
@@ -196,12 +222,24 @@ def parse_interval_line(line):
     return None
 
 
+def find_loop_file():
+    """Find LOOP.md case-insensitively in /workspace."""
+    if os.path.isfile(LOOP_FILE):
+        return LOOP_FILE
+    for f in glob.glob("/workspace/[Ll][Oo][Oo][Pp].[Mm][Dd]"):
+        return f
+    return None
+
+
 def parse_loop_file(path):
     """
     Read LOOP.md and extract (interval_seconds, prompt_text).
 
     Returns None if the file doesn't exist, is empty, or has no usable prompt.
     """
+    if path is None:
+        return None
+
     try:
         with open(path, "r") as f:
             content = f.read()
@@ -300,18 +338,36 @@ def main():
     stdin_is_tty = os.isatty(stdin_fd)
     log.debug("stdin_is_tty=%s", stdin_is_tty)
 
-    # ── LOOP.md detection (before fork, while terminal is still cooked) ──
-    loop_config = parse_loop_file(LOOP_FILE)
+    # ── Loop detection (before fork, while terminal is still cooked) ──
+    loop_config = None
     loop_interval = None
     loop_prompt = None
-    if loop_config:
-        loop_interval, loop_prompt = loop_config
-        print(
-            f"\r🔄 LOOP.md detected — will re-prompt every "
-            f"{format_interval(loop_interval)}\r\n",
-            end="", flush=True,
-        )
-        log.debug("LOOP: interval=%ds, prompt=%r", loop_interval, loop_prompt[:80])
+
+    if LOOP_MODE:
+        # Inline prompt from env var takes priority over LOOP.md file
+        env_prompt = os.environ.get("CLAUDIUS_LOOP_PROMPT", "").strip()
+        if env_prompt:
+            env_interval = os.environ.get("CLAUDIUS_LOOP_INTERVAL", "")
+            loop_interval = int(env_interval) if env_interval else LOOP_DEFAULT_INTERVAL
+            loop_prompt = env_prompt
+            loop_config = (loop_interval, loop_prompt)
+            print(
+                f"\r🔄 Loop active — will re-prompt every "
+                f"{format_interval(loop_interval)}\r\n",
+                end="", flush=True,
+            )
+        else:
+            loop_config = parse_loop_file(find_loop_file())
+            if loop_config:
+                loop_interval, loop_prompt = loop_config
+                print(
+                    f"\r🔄 LOOP.md detected — will re-prompt every "
+                    f"{format_interval(loop_interval)}\r\n",
+                    end="", flush=True,
+                )
+
+        if loop_config:
+            log.debug("LOOP: interval=%ds, prompt=%r", loop_config[0], loop_config[1][:80])
 
     # Save original terminal settings so we can restore on exit
     old_termios = None
@@ -430,6 +486,10 @@ def main():
                         last_accept_time = now
                         log.debug("TRIGGER MATCHED (%s) — waiting %.1fs redraw + %ds accept delay", trigger, REDRAW_DELAY, ACCEPT_DELAY)
 
+                        # Send host notification for plan triggers
+                        if is_plan_trigger(trigger):
+                            send_notification("Claudius has a plan")
+
                         # Wait for the TUI to finish redrawing
                         time.sleep(REDRAW_DELAY)
                         drain_child_output(master_fd, stdout_fd)
@@ -463,8 +523,8 @@ def main():
                         # Clear the buffer so we don't re-trigger on residual text
                         output_buffer = ""
 
-            # ── LOOP.md: re-prompt Claude when idle ──
-            if loop_config:
+            # ── Loop: re-prompt Claude when idle ──
+            if LOOP_MODE and loop_config:
                 now = time.monotonic()
                 idle = now - last_child_output_time
                 since_prompt = now - last_loop_prompt_time

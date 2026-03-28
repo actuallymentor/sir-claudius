@@ -144,7 +144,7 @@ Worktrees are stored in `$CLAUDIUS_DIR/worktrees/` (default: `~/.claudius/worktr
 
 ## Chaining commands
 
-Chainable commands (`yolo`, `sandbox`, `mudbox`, `worktree`, `continue`, `resume`) can be combined in any order:
+Chainable commands (`yolo`, `autopilot`, `loop`, `sandbox`, `mudbox`, `worktree`, `continue`, `resume`) can be combined in any order:
 
 ```sh
 claudius yolo mudbox          # read-only workspace + skip permissions
@@ -155,16 +155,20 @@ claudius yolo resume          # skip permissions + pick a session to resume
 
 If both `sandbox` and `mudbox` are specified, `mudbox` takes priority (you get a read-only workspace rather than no workspace).
 
-## Periodic re-prompting (LOOP.md)
+## Periodic re-prompting (loop modifier)
 
-In autopilot mode, you can create a `LOOP.md` file in your project directory to periodically re-prompt Claude when it goes idle. This is useful for long-running tasks where you want Claude to keep working on a recurring basis.
+The `loop` modifier re-prompts Claude when it goes idle. You can provide a prompt inline or via a `LOOP.md` file (case-insensitive).
 
 ```sh
-# Create a LOOP.md in your project root
-echo "Check for new issues and fix them" > LOOP.md
+# Inline prompt — re-prompts every 30 minutes
+claudius loop "check for new issues and fix them"
 
-# Start autopilot — LOOP.md is picked up automatically
-claudius autopilot yolo
+# From LOOP.md — create the file first
+echo "Check for new issues and fix them" > LOOP.md
+claudius loop
+
+# Combine with yolo and autopilot for full autonomy
+claudius yolo autopilot loop
 ```
 
 The first line of `LOOP.md` can optionally specify an interval:
