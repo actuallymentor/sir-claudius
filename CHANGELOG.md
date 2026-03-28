@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.17.1] - 2026-03-28
+
+### Fixed
+- autopilot resume hint now shown outside tmux so it survives window close
+
 ## [0.17.0] - 2026-03-28
 
 ### Added

@@ -9,7 +9,7 @@ ORIGINAL_ARGS=("$@")
 # claudius — run Claude Code inside a Docker container
 # -----------------------------------------------------------
 
-CLAUDIUS_VERSION="0.17.0"
+CLAUDIUS_VERSION="0.17.1"
 REPO_URL="https://raw.githubusercontent.com/actuallymentor/sir-claudius/main/claudius?cachebust=$(date +%s)"
 
 IMAGE="${CLAUDE_SANDBOX_IMAGE:-actuallymentor/sir-claudius:latest}"
@@ -1342,7 +1342,7 @@ if [ "$AUTOPILOT" = true ] && [ -z "${CLAUDIUS_IN_TMUX:-}" ]; then
     # When the tmux server is already running from a prior session, new
     # sessions inherit the server's original env — not the caller's. This
     # ensures fresh values reach the re-exec.
-    _tmux_cmd="env CLAUDIUS_IN_TMUX=1"
+    _tmux_cmd="env CLAUDIUS_IN_TMUX=1 CLAUDIUS_TMUX_SESSION=$(printf '%q' "$_tmux_session")"
     for _var in ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN CLAUDE_MODEL \
                 CLAUDE_SANDBOX_IMAGE CLAUDE_SESSION_KEY CLAUDE_ORG_ID \
                 CLAUDIUS_DIR CLAUDIUS_NPM_ISOLATE GH_TOKEN; do
@@ -1360,7 +1360,19 @@ if [ "$AUTOPILOT" = true ] && [ -z "${CLAUDIUS_IN_TMUX:-}" ]; then
 
     echo "Autopilot session started for $_tmux_pwd" >&2
     echo "Attaching... (close terminal to detach, 'claudius sessions' to reattach later)" >&2
-    exec tmux -L claudius attach-session -t "=$_tmux_session"
+    tmux -L claudius attach-session -t "=$_tmux_session"
+    _tmux_exit=$?
+
+    # After tmux exits (session ended or detached), show any resume hint
+    # that the inner process wrote. This ensures the hint is visible even
+    # after the tmux window is gone.
+    _hint_key="${_tmux_session//\//_}"
+    _resume_file="${CLAUDIUS_DIR:-$HOME/.claudius}/.resume_hint_${_hint_key}"
+    if [ -f "$_resume_file" ]; then
+        cat "$_resume_file" >&2
+        rm -f "$_resume_file"
+    fi
+    exit $_tmux_exit
 fi
 
 # ---- stale worktree warning (once per day) ----
@@ -1443,7 +1455,6 @@ disown $!
 # the freshly-refreshed credentials.
 OAUTH_TOKEN="${CLAUDE_CODE_OAUTH_TOKEN:-}"
 CREDS_TMPFILE=""
-CREDS_DIRECT_MOUNT=""
 CRED_SYNC_PID=""
 HAS_HOST_CREDS=false
 
@@ -1504,14 +1515,31 @@ fi
 
 # Phase 2: capture credentials for the container (after any pre-flight refresh)
 #
-# Two strategies depending on platform:
-#   - Linux:  mount ~/.claude/.credentials.json directly into the container.
-#             Both host and container share the same file, so token refreshes
-#             on either side are visible immediately — no sync needed.
-#   - macOS:  the Keychain isn't a file, so we extract credentials into a temp
-#             file and bind-mount that. A background sync daemon re-extracts
-#             from the Keychain every 5 minutes so the container always has
-#             fresh tokens even if the host rotates them mid-session.
+# Both macOS and Linux copy credentials into a temp file and bind-mount that.
+# This ensures the container's node user (UID 1000) can always write refreshed
+# tokens back, regardless of the host UID. A background sync daemon propagates
+# host-side refreshes into the container using content hashing to avoid
+# overwriting tokens that the container refreshed itself.
+#
+# Why not mount the host file directly? Two reasons:
+#   1. On macOS, credentials live in the Keychain (not a file)
+#   2. On Linux, the host UID may differ from the container's UID 1000,
+#      making the bind-mounted file unwritable — silently breaking refresh
+#
+# Why not use mv for atomic writes? Docker file bind mounts track the original
+# inode. An mv creates a new inode at the same path, but the container keeps
+# seeing the old one — making the sync daemon's updates invisible.
+
+# Portable SHA-256 one-liner (piped into). Used by credential sync daemons
+# to detect when the source has changed without blindly overwriting.
+_sha256() {
+    if command -v shasum > /dev/null 2>&1; then
+        shasum -a 256 | cut -c1-64
+    else
+        sha256sum | cut -c1-64
+    fi
+}
+
 if [ -z "$OAUTH_TOKEN" ] && [ "$HAS_HOST_CREDS" = true ]; then
 
     # On macOS, extract credentials from the Keychain into a temp file
@@ -1520,20 +1548,31 @@ if [ -z "$OAUTH_TOKEN" ] && [ "$HAS_HOST_CREDS" = true ]; then
         if [ -n "$CREDS_JSON" ]; then
             CREDS_TMPFILE=$(mktemp)
             printf '%s' "$CREDS_JSON" > "$CREDS_TMPFILE"
-            chmod 600 "$CREDS_TMPFILE"
+            chmod 666 "$CREDS_TMPFILE"
 
             # Background daemon: re-extract credentials from the Keychain every
             # 5 minutes so the bind-mounted temp file stays fresh. OAuth access
             # tokens typically expire in ~1 hour; 5 min gives plenty of margin.
+            #
+            # The daemon only writes when the Keychain content has actually
+            # changed (host-side refresh), so it won't clobber tokens that the
+            # container refreshed on its own. Writes go through printf > file
+            # (in-place, preserves inode) — never mv, which would break the
+            # Docker file bind mount.
+            _initial_hash=$(printf '%s' "$CREDS_JSON" | _sha256)
             (
+                _last_keychain_hash="$_initial_hash"
                 while true; do
                     sleep 300
                     fresh=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null || true)
-                    if [ -n "$fresh" ]; then
-                        # Atomic write: temp file + mv prevents readers from seeing truncated JSON
-                        _fresh_tmp=$(mktemp)
-                        printf '%s' "$fresh" > "$_fresh_tmp"
-                        mv "$_fresh_tmp" "$CREDS_TMPFILE"
+                    [ -z "$fresh" ] && continue
+                    _fresh_hash=$(printf '%s' "$fresh" | _sha256)
+                    if [ "$_fresh_hash" != "$_last_keychain_hash" ]; then
+                        # Keychain content changed — host-side refresh happened.
+                        # Write in-place to preserve the inode (mv would break
+                        # the Docker bind mount).
+                        printf '%s' "$fresh" > "$CREDS_TMPFILE"
+                        _last_keychain_hash="$_fresh_hash"
                     fi
                 done
             ) &
@@ -1542,11 +1581,29 @@ if [ -z "$OAUTH_TOKEN" ] && [ "$HAS_HOST_CREDS" = true ]; then
         fi
     fi
 
-    # On Linux, mount the credentials file directly — no temp copy, no daemon.
-    # Both host and container share the same file, so token refreshes on either
-    # side are picked up immediately.
+    # On Linux, copy credentials to a temp file and start a sync daemon.
+    # Same strategy as macOS: writable temp file + hash-guarded sync.
     if [ -z "$CREDS_TMPFILE" ] && [ -f "$HOME/.claude/.credentials.json" ]; then
-        CREDS_DIRECT_MOUNT="$HOME/.claude/.credentials.json"
+        _src_creds="$HOME/.claude/.credentials.json"
+        CREDS_TMPFILE=$(mktemp)
+        cp "$_src_creds" "$CREDS_TMPFILE"
+        chmod 666 "$CREDS_TMPFILE"
+
+        _initial_hash=$(cat "$_src_creds" | _sha256)
+        (
+            _last_host_hash="$_initial_hash"
+            while true; do
+                sleep 300
+                [ -f "$_src_creds" ] || continue
+                _fresh_hash=$(cat "$_src_creds" | _sha256)
+                if [ "$_fresh_hash" != "$_last_host_hash" ]; then
+                    cat "$_src_creds" > "$CREDS_TMPFILE"
+                    _last_host_hash="$_fresh_hash"
+                fi
+            done
+        ) &
+        CRED_SYNC_PID=$!
+        disown "$CRED_SYNC_PID"
     fi
 
 fi
@@ -1926,11 +1983,8 @@ docker_flags+=( --security-opt "seccomp=unconfined" )
 
 # Pass authentication — prefer mounting credentials file (supports refresh)
 # over a static token env var (expires and can't be renewed).
-#   - CREDS_DIRECT_MOUNT (Linux): real credentials file mounted directly
-#   - CREDS_TMPFILE (macOS): temp copy kept fresh by the sync daemon
-if [ -n "$CREDS_DIRECT_MOUNT" ]; then
-    docker_flags+=( -v "$CREDS_DIRECT_MOUNT:$CONTAINER_HOME/.claude/.credentials.json" )
-elif [ -n "$CREDS_TMPFILE" ]; then
+# Both macOS and Linux use CREDS_TMPFILE (writable temp copy + sync daemon).
+if [ -n "$CREDS_TMPFILE" ]; then
     docker_flags+=( -v "$CREDS_TMPFILE:$CONTAINER_HOME/.claude/.credentials.json" )
 elif [ -n "$OAUTH_TOKEN" ]; then
     docker_flags+=( -e "CLAUDE_CODE_OAUTH_TOKEN=$OAUTH_TOKEN" )
@@ -2351,7 +2405,18 @@ with open(sys.argv[1], 'w') as f:
             if [ "$WORKTREE" = false ] || [ "${WORKTREE_KEPT:-}" = true ]; then
                 # Strip worktree:<ID> from display — resume auto-detects worktree sessions
                 display_modifiers=$(echo "$modifiers" | sed 's/ *worktree:[^ ]*//')
-                printf '\n  Resume this session with:\n  claudius%s resume %s\n\n' "$display_modifiers" "$session_id"
+                _resume_hint=$(printf '\n  Resume this session with:\n  claudius%s resume %s\n' "$display_modifiers" "$session_id")
+                printf '%s\n' "$_resume_hint"
+
+                # When running inside an autopilot tmux session, also write
+                # the hint to a file so the outer (host) process can display
+                # it after the tmux window closes.
+                if [ -n "${CLAUDIUS_TMUX_SESSION:-}" ]; then
+                    _hint_dir="${CLAUDIUS_DIR:-$HOME/.claudius}"
+                    _hint_key="${CLAUDIUS_TMUX_SESSION//\//_}"
+                    mkdir -p "$_hint_dir"
+                    printf '%s\n' "$_resume_hint" > "$_hint_dir/.resume_hint_${_hint_key}"
+                fi
             fi
         fi
     fi
