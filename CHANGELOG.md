@@ -1,9 +1,18 @@
 # Changelog
 
+## [0.18.0] - 2026-03-30
+
+### Changed
+- rename `autopilot` modifier to `background`
+- rename `CLAUDIUS_AUTOPILOT` env var to `CLAUDIUS_BACKGROUND`
+
+### Breaking
+- `claudius autopilot` is now `claudius background`
+
 ## [0.17.1] - 2026-03-28
 
 ### Fixed
-- autopilot resume hint now shown outside tmux so it survives window close
+- background resume hint now shown outside tmux so it survives window close
 
 ## [0.17.0] - 2026-03-28
 
@@ -13,19 +22,19 @@
 - case-insensitive LOOP.md file detection
 
 ### Changed
-- `yolo` now auto-accepts plans with 30s review window (was 10s, previously required autopilot)
-- `autopilot` only manages tmux sessions — no longer controls plan acceptance or loop
-- `loop` replaces autopilot's LOOP.md handling as a standalone modifier
+- `yolo` now auto-accepts plans with 30s review window (was 10s, previously required background)
+- `background` only manages tmux sessions — no longer controls plan acceptance or loop
+- `loop` replaces background's LOOP.md handling as a standalone modifier
 
 ### Breaking
-- `claudius autopilot` no longer auto-accepts plans — use `claudius yolo autopilot`
-- `claudius autopilot` no longer handles LOOP.md — use `claudius autopilot loop`
+- `claudius background` no longer auto-accepts plans — use `claudius yolo background`
+- `claudius background` no longer handles LOOP.md — use `claudius background loop`
 
 ## [0.16.0] - 2026-03-27
 
 ### Added
-- enable tmux mouse support by default in autopilot sessions (82ddff5)
-- increase tmux scrollback history to 10k lines in autopilot sessions (4ea088c)
+- enable tmux mouse support by default in background sessions (82ddff5)
+- increase tmux scrollback history to 10k lines in background sessions (4ea088c)
 
 ## [0.15.3] - 2026-03-26
 
@@ -36,7 +45,7 @@
 - unquoted temp file path in update subcommand trap
 
 ### Changed
-- document LOOP.md periodic re-prompting feature (autopilot mode)
+- document LOOP.md periodic re-prompting feature (background mode)
 - fix README claiming worktree is incompatible with continue/resume (they work fine)
 - clarify sandbox "no changes escape" — session metadata and caches persist on host
 
@@ -55,10 +64,10 @@
 ## [0.14.0] - 2026-03-12
 
 ### Added
-- `autopilot` modifier — auto-accept plan approval prompts independently of yolo
+- `background` modifier — auto-accept plan approval prompts independently of yolo
 
 ### Changed
-- `yolo` no longer auto-accepts plans — use `claudius yolo autopilot` for full autonomy
+- `yolo` no longer auto-accepts plans — use `claudius yolo background` for full autonomy
 - permission bypass triggers in auto-accept.py gated by `CLAUDIUS_YOLO` env var
 
 ## [0.13.3] - 2026-03-12

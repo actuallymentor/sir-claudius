@@ -9,7 +9,7 @@ Docker-based sandbox for running Claude Code. Key files: `Dockerfile`, `claudius
 - GitHub CLI auth: mounted `~/.config/gh` read-only into container (added 2026-02-24)
 - Auto-accept plan mode prompts in YOLO mode via `auto-accept.py` PTY wrapper (added 2026-02-25)
 - Auto-accept uses active select-based wait during 30s delay — user keystrokes cancel auto-accept (fixed 2026-03-12, delay increased 2026-03-28)
-- Modifiers refactored (v0.17.0): yolo = permissions + plan auto-accept (30s delay) + host notifications; autopilot = tmux only; loop = periodic re-prompting (replaces autopilot's LOOP.md handling) (refactored 2026-03-28)
+- Modifiers refactored (v0.17.0): yolo = permissions + plan auto-accept (30s delay) + host notifications; background = tmux only; loop = periodic re-prompting (replaces old autopilot's LOOP.md handling) (refactored 2026-03-28, renamed autopilot→background 2026-03-30)
 - Plan approval UI changed in Claude Code ~v2.1.x — Enter now rejects; Shift+Tab (`\x1b[Z`) bound to "yes-accept-edits" accepts (fixed 2026-03-12)
 - Claude Code TUI uses `\x1b[\d*C` (cursor-forward) as visual spaces; must replace with real space before stripping ANSI (fixed 2026-02-25)
 - OAuth auth bug: pre-flight check can rotate refresh tokens, invalidating credentials captured before the check. Fix: two-phase auth — detect first, capture after pre-flight (fixed 2026-02-27)
@@ -31,9 +31,9 @@ Portable `statusline.sh` ships with the container image at `/usr/local/bin/statu
 
 When yolo detects a plan trigger, `auto-accept.py` writes to `/tmp/claudius-notify` (a host-mounted FIFO). The host-side `claudius` script runs a background watcher that reads from the FIFO and sends OS notifications (osascript on macOS, notify-send on Linux, terminal bell as universal fallback). Non-blocking writes with `O_WRONLY|O_NONBLOCK` — fails silently if no reader.
 
-## Autopilot tmux Wrapping (added 2026-03-26, refactored 2026-03-28)
+## Background tmux Wrapping (added 2026-03-26, refactored 2026-03-28, renamed from autopilot 2026-03-30)
 
-`claudius autopilot` re-executes inside a persistent tmux session using a dedicated server socket (`tmux -L claudius`). One session per directory (keyed by `pwd -P`, encoded to escape `.` and `:`). As of v0.17.0, autopilot ONLY manages tmux — it no longer controls plan acceptance or loop. Use `claudius yolo autopilot loop` for the old full-autonomy behavior.
+`claudius background` re-executes inside a persistent tmux session using a dedicated server socket (`tmux -L claudius`). One session per directory (keyed by `pwd -P`, encoded to escape `.` and `:`). As of v0.17.0, background ONLY manages tmux — it no longer controls plan acceptance or loop. Use `claudius yolo background loop` for the old full-autonomy behavior.
 
 ## Gotchas
 

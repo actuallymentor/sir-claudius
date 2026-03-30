@@ -144,7 +144,7 @@ Worktrees are stored in `$CLAUDIUS_DIR/worktrees/` (default: `~/.claudius/worktr
 
 ## Chaining commands
 
-Chainable commands (`yolo`, `autopilot`, `loop`, `sandbox`, `mudbox`, `worktree`, `continue`, `resume`) can be combined in any order:
+Chainable commands (`yolo`, `background`, `loop`, `sandbox`, `mudbox`, `worktree`, `continue`, `resume`) can be combined in any order:
 
 ```sh
 claudius yolo mudbox          # read-only workspace + skip permissions
@@ -167,8 +167,8 @@ claudius loop "check for new issues and fix them"
 echo "Check for new issues and fix them" > LOOP.md
 claudius loop
 
-# Combine with yolo and autopilot for full autonomy
-claudius yolo autopilot loop
+# Combine with yolo and background for full autonomy
+claudius yolo background loop
 ```
 
 The first line of `LOOP.md` can optionally specify an interval:

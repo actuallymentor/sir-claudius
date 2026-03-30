@@ -2,14 +2,14 @@
 set -e
 
 # Preserve original arguments before any parsing shifts them away.
-# Used by the tmux re-execution gate in autopilot mode.
+# Used by the tmux re-execution gate in background mode.
 ORIGINAL_ARGS=("$@")
 
 # -----------------------------------------------------------
 # claudius — run Claude Code inside a Docker container
 # -----------------------------------------------------------
 
-CLAUDIUS_VERSION="0.17.1"
+CLAUDIUS_VERSION="0.18.0"
 REPO_URL="https://raw.githubusercontent.com/actuallymentor/sir-claudius/main/claudius?cachebust=$(date +%s)"
 
 IMAGE="${CLAUDE_SANDBOX_IMAGE:-actuallymentor/sir-claudius:latest}"
@@ -32,7 +32,7 @@ Usage: claudius [command...] [options] [-- claude args...]
 
 Commands (chainable — combine in any order):
   yolo        Run with blanket permissions and auto-accept plans (30s review window)
-  autopilot   Run in a persistent tmux session (close terminal to detach)
+  background  Run in a persistent tmux session (close terminal to detach)
   loop        Re-prompt Claude when idle (reads LOOP.md, or pass a prompt string)
   sandbox     Run without mounting a workspace; host files are read-only
   mudbox      Mount the workspace as read-only (explore code without modifying it)
@@ -51,7 +51,7 @@ Standalone commands:
   worktree clean --merged  Remove metadata for already-merged worktrees
   worktree clean --stale   Review worktrees older than 30 days
   worktree clean --all     Merge and clean up all active worktrees
-  sessions               List active autopilot tmux sessions
+  sessions               List active background tmux sessions
 
 Options:
   --help, -h      Show this help message
@@ -60,17 +60,17 @@ Options:
 Examples:
   claudius                          Interactive session in the current directory
   claudius yolo                     Skip permissions + auto-accept plans (30s review)
-  claudius autopilot                Persistent tmux session (close terminal to detach)
-  claudius yolo autopilot           Full autonomy in tmux
+  claudius background               Persistent tmux session (close terminal to detach)
+  claudius yolo background          Full autonomy in tmux
   claudius loop                     Re-prompt from LOOP.md when idle
   claudius loop "check for errors"  Re-prompt with custom string every 30 minutes
-  claudius yolo autopilot loop      Full autonomy in tmux with periodic re-prompting
-  claudius sessions                 List active autopilot tmux sessions (with attach commands)
+  claudius yolo background loop     Full autonomy in tmux with periodic re-prompting
+  claudius sessions                 List active background tmux sessions (with attach commands)
   claudius mudbox                   Read-only workspace (code review, exploration)
   claudius worktree                 Isolated worktree (parallel-safe)
   claudius worktree yolo            Isolated worktree + skip permissions
   claudius resume <id>              Resume a session (auto-detects worktree sessions)
-  claudius resume "/path/to/dir"    Reattach to an autopilot tmux session by path
+  claudius resume "/path/to/dir"    Reattach to a background tmux session by path
   claudius yolo mudbox              Read-only workspace + skip permissions
   claudius sandbox yolo             No workspace + skip permissions
   claudius mudbox continue          Read-only workspace + resume last session
@@ -701,7 +701,7 @@ for entry, resume_cmd, wt_branch in zip(sorted_sessions, resume_cmds, wt_branche
 
 fi
 
-# ---- sessions subcommand: list active autopilot tmux sessions ----
+# ---- sessions subcommand: list active background tmux sessions ----
 if [ "${1:-}" = "sessions" ]; then
 
     if ! command -v tmux > /dev/null 2>&1; then
@@ -714,13 +714,13 @@ if [ "${1:-}" = "sessions" ]; then
     _dim=$'\033[2m'
     _rst=$'\033[0m'
 
-    # All autopilot sessions live on a dedicated tmux server socket.
+    # All background sessions live on a dedicated tmux server socket.
     # Only use session-level formats here — pane_dead is not available
     # in list-sessions on all tmux versions.
     raw=$(tmux -L claudius list-sessions -F \
         '#{session_name}'$'\t''#{?session_attached,attached,detached}'$'\t''#{session_created}' \
         2>/dev/null) || {
-        echo "No active Claudius autopilot sessions."
+        echo "No active Claudius background sessions."
         exit 0
     }
 
@@ -729,7 +729,7 @@ if [ "${1:-}" = "sessions" ]; then
 
     echo ""
     echo "----------------------------"
-    echo "Claudius autopilot sessions"
+    echo "Claudius background sessions"
     echo "----------------------------"
 
     while IFS=$'\t' read -r name attached epoch; do
@@ -1089,7 +1089,7 @@ fi
 # Commands like yolo, sandbox, mudbox, continue, and resume can be
 # combined in any order: claudius yolo mudbox, claudius sandbox continue, etc.
 YOLO=false
-AUTOPILOT=false
+BACKGROUND=false
 LOOP=false
 LOOP_PROMPT=""
 SANDBOX=false
@@ -1102,13 +1102,13 @@ RESUME_NAME=""
 while [ $# -gt 0 ]; do
     case "$1" in
         yolo)      YOLO=true; shift ;;
-        autopilot) AUTOPILOT=true; shift ;;
+        background) BACKGROUND=true; shift ;;
         loop)
             LOOP=true; shift
             # Next non-flag, non-modifier argument is the loop prompt
             if [ $# -gt 0 ] && [[ "${1:-}" != -* ]]; then
                 case "$1" in
-                    yolo|autopilot|loop|sandbox|mudbox|worktree|continue|resume) ;;
+                    yolo|background|loop|sandbox|mudbox|worktree|continue|resume) ;;
                     *) LOOP_PROMPT="$1"; shift ;;
                 esac
             fi
@@ -1122,7 +1122,7 @@ while [ $# -gt 0 ]; do
             # Next non-flag, non-subcommand argument is the session name
             if [ $# -gt 0 ] && [[ "${1:-}" != -* ]]; then
                 case "$1" in
-                    yolo|autopilot|loop|sandbox|mudbox|worktree|continue|resume) ;;
+                    yolo|background|loop|sandbox|mudbox|worktree|continue|resume) ;;
                     *) RESUME_NAME="$1"; shift ;;
                 esac
             fi
@@ -1235,9 +1235,9 @@ print(meta.get('gitDir', ''))
 
 fi
 
-# ---- resume by path: attach to an existing autopilot tmux session ----
+# ---- resume by path: attach to an existing background tmux session ----
 # When `claudius resume "/some/path"` is called with an absolute path,
-# treat it as an autopilot tmux session rather than a Claude session ID.
+# treat it as a background tmux session rather than a Claude session ID.
 # Strip stray quotes in case the user copy-pasted a quoted path literally.
 RESUME_NAME="${RESUME_NAME#\"}"
 RESUME_NAME="${RESUME_NAME%\"}"
@@ -1248,24 +1248,24 @@ if [ "$RESUME" = true ] && [ -n "${RESUME_NAME:-}" ] && [[ "$RESUME_NAME" == /* 
         exit 1
     fi
 
-    # Encode the path the same way autopilot does
+    # Encode the path the same way background mode does
     _resume_session="${RESUME_NAME//\./__DOT__}"
     _resume_session="${_resume_session//:/__CLN__}"
 
     if ! tmux -L claudius has-session -t "=$_resume_session" 2>/dev/null; then
-        echo "No autopilot session found for: $RESUME_NAME" >&2
+        echo "No background session found for: $RESUME_NAME" >&2
         echo "Run 'claudius sessions' to see active sessions." >&2
         exit 1
     fi
 
     _pane_dead=$(tmux -L claudius list-panes -t "=$_resume_session" -F '#{pane_dead}' 2>/dev/null || echo "1")
     if [ "$_pane_dead" = "1" ]; then
-        echo "Autopilot session for $RESUME_NAME has finished." >&2
+        echo "Background session for $RESUME_NAME has finished." >&2
         tmux -L claudius kill-session -t "=$_resume_session" 2>/dev/null || true
         exit 0
     fi
 
-    echo "Attaching to autopilot session for $RESUME_NAME" >&2
+    echo "Attaching to background session for $RESUME_NAME" >&2
     echo "Close terminal to detach, 'claudius sessions' to reattach later." >&2
     exec tmux -L claudius attach-session -t "=$_resume_session"
 fi
@@ -1286,14 +1286,14 @@ if [ "$RESUME" = true ] && [ -n "${RESUME_NAME:-}" ]; then
     fi
 fi
 
-# ---- tmux session wrapping for autopilot mode ----
-# When autopilot is active and we're not already inside a tmux session,
+# ---- tmux session wrapping for background mode ----
+# When background is active and we're not already inside a tmux session,
 # re-execute the entire script inside a persistent tmux session. This
-# lets the user close the terminal and the autopilot continues running.
-if [ "$AUTOPILOT" = true ] && [ -z "${CLAUDIUS_IN_TMUX:-}" ]; then
+# lets the user close the terminal and the session continues running.
+if [ "$BACKGROUND" = true ] && [ -z "${CLAUDIUS_IN_TMUX:-}" ]; then
 
     if ! command -v tmux > /dev/null 2>&1; then
-        echo "Error: tmux is required for autopilot mode. Install it with:" >&2
+        echo "Error: tmux is required for background mode. Install it with:" >&2
         echo "  macOS:  brew install tmux" >&2
         echo "  Linux:  sudo apt install tmux" >&2
         exit 1
@@ -1321,12 +1321,12 @@ if [ "$AUTOPILOT" = true ] && [ -z "${CLAUDIUS_IN_TMUX:-}" ]; then
         _pane_dead=$(tmux -L claudius list-panes -t "=$_tmux_session" -F '#{pane_dead}' 2>/dev/null || echo "1")
         if [ "$_pane_dead" = "1" ]; then
             # Previous run finished — clean up and start fresh
-            echo "Previous autopilot session for this directory has finished." >&2
+            echo "Previous background session for this directory has finished." >&2
             echo "Starting a new session..." >&2
             tmux -L claudius kill-session -t "=$_tmux_session" 2>/dev/null || true
         else
             # Session is still running — attach to it
-            echo "Autopilot session already running for $_tmux_pwd" >&2
+            echo "Background session already running for $_tmux_pwd" >&2
             echo "Attaching... (close terminal to detach, 'claudius sessions' to reattach later)" >&2
             exec tmux -L claudius attach-session -t "=$_tmux_session"
         fi
@@ -1354,11 +1354,11 @@ if [ "$AUTOPILOT" = true ] && [ -z "${CLAUDIUS_IN_TMUX:-}" ]; then
     # Create a detached tmux session running the full claudius pipeline
     tmux -L claudius new-session -d -s "$_tmux_session" "$_tmux_cmd"
 
-    # Enable mouse support and generous scrollback for autopilot sessions
+    # Enable mouse support and generous scrollback for background sessions
     tmux -L claudius set -g mouse on 2>/dev/null || true
     tmux -L claudius set -g history-limit 10000 2>/dev/null || true
 
-    echo "Autopilot session started for $_tmux_pwd" >&2
+    echo "Background session started for $_tmux_pwd" >&2
     echo "Attaching... (close terminal to detach, 'claudius sessions' to reattach later)" >&2
     tmux -L claudius attach-session -t "=$_tmux_session"
     _tmux_exit=$?
@@ -2009,13 +2009,13 @@ else
     docker_flags+=( -e "AGENT_AUTONOMY_MODE=regular" )
 fi
 
-# Expose autopilot flag (tmux management only — no longer gates auto-accept.py)
-if [ "$AUTOPILOT" = true ]; then
-    docker_flags+=( -e "CLAUDIUS_AUTOPILOT=1" )
+# Expose background flag (tmux management only — no longer gates auto-accept.py)
+if [ "$BACKGROUND" = true ]; then
+    docker_flags+=( -e "CLAUDIUS_BACKGROUND=1" )
 
-    # Backward-compat notice: autopilot no longer auto-accepts plans
+    # Backward-compat notice: background no longer auto-accepts plans
     if [ "$YOLO" = false ]; then
-        echo "Note: autopilot now only manages tmux. Add 'yolo' for plan auto-acceptance." >&2
+        echo "Note: background only manages tmux. Add 'yolo' for plan auto-acceptance." >&2
     fi
 fi
 
@@ -2078,7 +2078,7 @@ fi
 # Build a human-readable modifiers string for the statusline
 _mods=""
 [ "$YOLO" = true ] && _mods="${_mods:+$_mods }yolo"
-[ "$AUTOPILOT" = true ] && _mods="${_mods:+$_mods }autopilot"
+[ "$BACKGROUND" = true ] && _mods="${_mods:+$_mods }background"
 [ "$LOOP" = true ] && _mods="${_mods:+$_mods }loop"
 [ "$MUDBOX" = true ] && _mods="${_mods:+$_mods }mudbox"
 [ "$SANDBOX" = true ] && _mods="${_mods:+$_mods }sandbox"
@@ -2375,7 +2375,7 @@ if [ -f "$HISTORY_FILE" ]; then
             # Reconstruct the modifier flags used in this session
             modifiers=""
             [ "$YOLO" = true ] && modifiers="$modifiers yolo"
-            [ "$AUTOPILOT" = true ] && modifiers="$modifiers autopilot"
+            [ "$BACKGROUND" = true ] && modifiers="$modifiers background"
             [ "$LOOP" = true ] && modifiers="$modifiers loop"
             [ "$SANDBOX" = true ] && modifiers="$modifiers sandbox"
             [ "$MUDBOX" = true ] && modifiers="$modifiers mudbox"
@@ -2408,7 +2408,7 @@ with open(sys.argv[1], 'w') as f:
                 _resume_hint=$(printf '\n  Resume this session with:\n  claudius%s resume %s\n' "$display_modifiers" "$session_id")
                 printf '%s\n' "$_resume_hint"
 
-                # When running inside an autopilot tmux session, also write
+                # When running inside a background tmux session, also write
                 # the hint to a file so the outer (host) process can display
                 # it after the tmux window closes.
                 if [ -n "${CLAUDIUS_TMUX_SESSION:-}" ]; then
