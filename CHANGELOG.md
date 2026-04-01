@@ -1,6 +1,9 @@
 # Changelog
 
-## [0.19.1] - 2026-04-01
+## [0.20.0] - 2026-04-01
+
+### Added
+- `update` runs `claude update` on the host if Claude Code is installed
 
 ### Fixed
 - remove hardcoded `--platform=linux/arm64` from Dockerfile causing exec format error on x86_64

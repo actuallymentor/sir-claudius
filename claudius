@@ -9,7 +9,7 @@ ORIGINAL_ARGS=("$@")
 # claudius — run Claude Code inside a Docker container
 # -----------------------------------------------------------
 
-CLAUDIUS_VERSION="0.19.1"
+CLAUDIUS_VERSION="0.20.0"
 REPO_URL="https://raw.githubusercontent.com/actuallymentor/sir-claudius/main/claudius?cachebust=$(date +%s)"
 
 IMAGE="${CLAUDE_SANDBOX_IMAGE:-actuallymentor/sir-claudius:latest}"
@@ -42,7 +42,7 @@ Commands (chainable — combine in any order):
 
 Standalone commands:
   setup                  Authenticate and save an OAuth token
-  update                 Fetch the latest script, pull the Docker image, update ~/.agents
+  update                 Fetch the latest script, pull the Docker image, update Claude Code and ~/.agents
   rebuild                Force-rebuild the Docker image with --no-cache
   history                List previous sessions (default: 15, or pass a number / "all" / "search text")
   history inspect <id>   Show the full log and details of a session
@@ -177,6 +177,16 @@ if [ "${1:-}" = "update" ]; then
     echo "Pulling $IMAGE..." >&2
     if ! docker pull "$IMAGE" >&2; then
         echo "Warning: image pull failed (you may need to rebuild locally)" >&2
+    fi
+
+    # Update Claude Code on the host (if installed)
+    if command -v claude > /dev/null 2>&1; then
+        echo "Updating Claude Code..." >&2
+        if claude update 2>&1; then
+            echo "Claude Code updated" >&2
+        else
+            echo "Warning: Claude Code update failed" >&2
+        fi
     fi
 
     # Update ~/.agents repo if it exists
