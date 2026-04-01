@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.20.2] - 2026-04-01
+
+### Fixed
+- clear terminal after Claude's TUI exits to prevent rendering artifacts from polluting script output
+
 ## [0.20.1] - 2026-04-01
 
 ### Fixed

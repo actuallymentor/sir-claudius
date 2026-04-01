@@ -9,7 +9,7 @@ ORIGINAL_ARGS=("$@")
 # claudius — run Claude Code inside a Docker container
 # -----------------------------------------------------------
 
-CLAUDIUS_VERSION="0.20.1"
+CLAUDIUS_VERSION="0.20.2"
 REPO_URL="https://raw.githubusercontent.com/actuallymentor/sir-claudius/main/claudius?cachebust=$(date +%s)"
 
 IMAGE="${CLAUDE_SANDBOX_IMAGE:-actuallymentor/sir-claudius:latest}"
@@ -2265,6 +2265,12 @@ fi
 
 docker run "${docker_flags[@]}" "$IMAGE" claude "${claude_flags[@]}" "$@"
 exit_code=$?
+
+# Clear TUI artifacts — Claude's ink-based TUI can leave rendering garbage
+# (box-drawing chars, menu text) on screen after exit, polluting subsequent output
+if [ -t 1 ]; then
+    clear 2>/dev/null || printf '\033[H\033[2J' 2>/dev/null
+fi
 
 # Show deferred update notice (background check wrote to temp file to avoid interleaving)
 if [ -s "$UPDATE_NOTICE_FILE" ]; then
