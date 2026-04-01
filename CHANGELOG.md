@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.19.1] - 2026-04-01
+
+### Fixed
+- remove hardcoded `--platform=linux/arm64` from Dockerfile causing exec format error on x86_64
+
 ## [0.19.0] - 2026-04-01
 
 ### Added

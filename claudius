@@ -9,7 +9,7 @@ ORIGINAL_ARGS=("$@")
 # claudius — run Claude Code inside a Docker container
 # -----------------------------------------------------------
 
-CLAUDIUS_VERSION="0.19.0"
+CLAUDIUS_VERSION="0.19.1"
 REPO_URL="https://raw.githubusercontent.com/actuallymentor/sir-claudius/main/claudius?cachebust=$(date +%s)"
 
 IMAGE="${CLAUDE_SANDBOX_IMAGE:-actuallymentor/sir-claudius:latest}"
