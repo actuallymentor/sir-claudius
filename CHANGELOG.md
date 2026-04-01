@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.19.0] - 2026-04-01
+
+### Added
+- `update` pulls `~/.agents` git repo if present
+
 ## [0.18.0] - 2026-03-30
 
 ### Changed

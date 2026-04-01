@@ -9,7 +9,7 @@ ORIGINAL_ARGS=("$@")
 # claudius — run Claude Code inside a Docker container
 # -----------------------------------------------------------
 
-CLAUDIUS_VERSION="0.18.0"
+CLAUDIUS_VERSION="0.19.0"
 REPO_URL="https://raw.githubusercontent.com/actuallymentor/sir-claudius/main/claudius?cachebust=$(date +%s)"
 
 IMAGE="${CLAUDE_SANDBOX_IMAGE:-actuallymentor/sir-claudius:latest}"
@@ -42,7 +42,7 @@ Commands (chainable — combine in any order):
 
 Standalone commands:
   setup                  Authenticate and save an OAuth token
-  update                 Fetch the latest script and pull the Docker image
+  update                 Fetch the latest script, pull the Docker image, update ~/.agents
   rebuild                Force-rebuild the Docker image with --no-cache
   history                List previous sessions (default: 15, or pass a number / "all" / "search text")
   history inspect <id>   Show the full log and details of a session
@@ -177,6 +177,21 @@ if [ "${1:-}" = "update" ]; then
     echo "Pulling $IMAGE..." >&2
     if ! docker pull "$IMAGE" >&2; then
         echo "Warning: image pull failed (you may need to rebuild locally)" >&2
+    fi
+
+    # Update ~/.agents repo if it exists
+    if [ -d "$HOME/.agents/.git" ]; then
+        AGENTS_BEFORE=$(git -C "$HOME/.agents" rev-parse HEAD 2>/dev/null)
+        if git -C "$HOME/.agents" pull --quiet 2>/dev/null; then
+            AGENTS_AFTER=$(git -C "$HOME/.agents" rev-parse HEAD 2>/dev/null)
+            if [ "$AGENTS_BEFORE" != "$AGENTS_AFTER" ]; then
+                echo "~/.agents repository updated" >&2
+            else
+                echo "~/.agents repository up to date" >&2
+            fi
+        else
+            echo "Warning: failed to update ~/.agents repository" >&2
+        fi
     fi
 
     echo "Update complete." >&2
