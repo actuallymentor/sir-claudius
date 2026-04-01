@@ -9,7 +9,7 @@ ORIGINAL_ARGS=("$@")
 # claudius — run Claude Code inside a Docker container
 # -----------------------------------------------------------
 
-CLAUDIUS_VERSION="0.20.0"
+CLAUDIUS_VERSION="0.20.1"
 REPO_URL="https://raw.githubusercontent.com/actuallymentor/sir-claudius/main/claudius?cachebust=$(date +%s)"
 
 IMAGE="${CLAUDE_SANDBOX_IMAGE:-actuallymentor/sir-claudius:latest}"
@@ -1910,6 +1910,7 @@ with open(sys.argv[1], 'r') as f:
 
 # Always set the statusLine command to the container's portable script
 sl = data.get('statusLine', {})
+sl['type'] = 'command'
 sl['command'] = 'bash /usr/local/bin/statusline.sh'
 data['statusLine'] = sl
 

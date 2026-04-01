@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.20.1] - 2026-04-01
+
+### Fixed
+- add missing `statusLine.type` field in settings.json patch, fixing validation error on fresh installs
+
 ## [0.20.0] - 2026-04-01
 
 ### Added
