@@ -82,6 +82,25 @@ Examples:
   claudius worktree list            List active worktrees
   claudius worktree clean <id>      Clean up a specific worktree
 
+LOOP.md format:
+  The first line may optionally set a global interval (e.g. "10 minutes", "*/5 * * * *").
+  Use === delimiters (3+ equals) to split into multiple blocks sent sequentially:
+
+    check for issues and fix them
+    ===
+    /clear
+    ===60s===
+    summarize what you did
+
+  Delimiter formats:
+    ===              Wait until Claude is idle (default)
+    ===idle===       Same — explicit idle wait
+    ===60s===        Wait 60 seconds
+    ===10m===        Wait 10 minutes
+    ===2h===         Wait 2 hours
+
+  After the last block, the loop wraps around using the global interval.
+
 Environment variables:
   CLAUDE_SANDBOX_IMAGE   Docker image to use (default: actuallymentor/sir-claudius:latest)
   CLAUDE_MODEL           Model to use (default: claude-opus-4-6)
