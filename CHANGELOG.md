@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.23.0] - 2026-04-06
+
+### Added
+- live countdown in loop statusline modifier (reads deadline from auto-accept.py)
+- boot message shows source and HH:MM:SS interval: "Looping ./LOOP.md every 00:00:05"
+
 ## [0.22.2] - 2026-04-06
 
 ### Fixed

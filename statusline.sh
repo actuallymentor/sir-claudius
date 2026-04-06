@@ -52,14 +52,29 @@ if [ "$show_modifiers" = "1" ]; then
             mod_display="${mod_display:+${mod_display}·}${m}"
         done
 
-        # Append interval after "loop" modifier as hh:mm:ss if detected
-        if [ -n "${CLAUDIUS_LOOP_INTERVAL:-}" ]; then
+        # Append countdown after "loop" modifier — reads deadline from auto-accept.py
+        _deadline_file="/tmp/claudius-loop-deadline"
+        if [ -f "$_deadline_file" ]; then
+            _deadline=$(cat "$_deadline_file" 2>/dev/null)
+            if [ "$_deadline" = "idle" ]; then
+                _li_fmt="idle"
+            elif [ -n "$_deadline" ]; then
+                # Wall-clock deadline — compare with current epoch
+                _now=$(date +%s)
+                _remaining=$(awk "BEGIN { r = $_deadline - $_now; if (r < 0) r = 0; printf \"%d\", r }")
+                _lh=$(( _remaining / 3600 ))
+                _lm=$(( (_remaining % 3600) / 60 ))
+                _ls=$(( _remaining % 60 ))
+                _li_fmt=$(printf '%02d:%02d:%02d' $_lh $_lm $_ls)
+            fi
+            [ -n "${_li_fmt:-}" ] && mod_display="${mod_display/loop/loop ${_li_fmt}}"
+        elif [ -n "${CLAUDIUS_LOOP_INTERVAL:-}" ]; then
+            # Fallback: show static interval if no deadline file yet
             _li=$CLAUDIUS_LOOP_INTERVAL
             _lh=$(( _li / 3600 ))
             _lm=$(( (_li % 3600) / 60 ))
             _ls=$(( _li % 60 ))
             _li_fmt=$(printf '%02d:%02d:%02d' $_lh $_lm $_ls)
-            # Replace "loop" with "loop hh:mm:ss" in the display
             mod_display="${mod_display/loop/loop ${_li_fmt}}"
         fi
 

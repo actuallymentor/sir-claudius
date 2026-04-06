@@ -120,6 +120,7 @@ def send_notification(message):
 LOOP_FILE = "/workspace/LOOP.md"
 LOOP_IDLE_THRESHOLD = 120    # seconds of output silence → Claude is idle
 LOOP_DEFAULT_INTERVAL = 1800 # 30 minutes
+LOOP_DEADLINE_FILE = "/tmp/claudius-loop-deadline"
 
 
 def strip_ansi(text):
@@ -369,6 +370,38 @@ def format_interval(seconds):
         return f"{n} day{'s' if n != 1 else ''}"
 
 
+def format_hms(seconds):
+    """Format seconds as HH:MM:SS."""
+    h = seconds // 3600
+    m = (seconds % 3600) // 60
+    s = seconds % 60
+    return f"{h:02d}:{m:02d}:{s:02d}"
+
+
+def write_loop_deadline(wait_type, wait_seconds, loop_interval):
+    """Write the next-fire wall-clock deadline for the statusline countdown."""
+    try:
+        if wait_type == "idle":
+            # Can't predict when idle will trigger — signal it
+            content = "idle\n"
+        else:
+            delay = wait_seconds if wait_type == "timed" else loop_interval
+            deadline = time.time() + delay
+            content = f"{deadline:.2f}\n"
+        with open(LOOP_DEADLINE_FILE, "w") as f:
+            f.write(content)
+    except OSError:
+        pass
+
+
+def clear_loop_deadline():
+    """Remove the deadline file on exit."""
+    try:
+        os.unlink(LOOP_DEADLINE_FILE)
+    except OSError:
+        pass
+
+
 def wait_for_accept_delay(master_fd, stdin_fd, stdout_fd, delay):
     """
     Wait `delay` seconds while keeping I/O flowing.
@@ -438,8 +471,8 @@ def main():
             loop_blocks = [(env_prompt, "idle", None)]
             loop_config = (loop_interval, loop_blocks)
             print(
-                f"\r🔄 Loop active — will re-prompt every "
-                f"{format_interval(loop_interval)}\r\n",
+                f"\r🔄 Looping inline prompt every "
+                f"{format_hms(loop_interval)}\r\n",
                 end="", flush=True,
             )
         else:
@@ -447,11 +480,11 @@ def main():
             loop_config = parse_loop_file(_loop_path)
             if loop_config:
                 loop_interval, loop_blocks = loop_config
-                _source = "~/.agents/LOOP.md" if "/.agents/" in (_loop_path or "") else "LOOP.md"
+                _source = "~/.agents/LOOP.md" if "/.agents/" in (_loop_path or "") else "./LOOP.md"
                 _block_info = f" ({len(loop_blocks)} blocks)" if len(loop_blocks) > 1 else ""
                 print(
-                    f"\r🔄 {_source} detected{_block_info} — will re-prompt every "
-                    f"{format_interval(loop_interval)}\r\n",
+                    f"\r🔄 Looping {_source}{_block_info} every "
+                    f"{format_hms(loop_interval)}\r\n",
                     end="", flush=True,
                 )
 
@@ -514,6 +547,10 @@ def main():
     # loop_interval seconds instead of waiting for the 120s idle threshold.
     loop_wait_type = "interval" if loop_blocks else "idle"
     loop_wait_seconds = None
+
+    # Write the initial deadline so the statusline can start counting down
+    if LOOP_MODE and loop_blocks:
+        write_loop_deadline(loop_wait_type, loop_wait_seconds, loop_interval)
 
     # Build the list of fds to select on
     read_fds = [master_fd]
@@ -665,6 +702,9 @@ def main():
                     loop_wait_seconds = next_wait_seconds
                     loop_block_index = (loop_block_index + 1) % len(loop_blocks)
 
+                    # Update the deadline for the statusline countdown
+                    write_loop_deadline(loop_wait_type, loop_wait_seconds, loop_interval)
+
     except StopIteration:
         pass
     except KeyboardInterrupt:
@@ -678,6 +718,7 @@ def main():
         # Without this, the terminal stays in raw mode (no echo, no line editing).
         if old_termios is not None:
             termios.tcsetattr(stdin_fd, termios.TCSADRAIN, old_termios)
+        clear_loop_deadline()
 
     # Wait for the child and propagate its exit code
     while True:
