@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.22.0] - 2026-04-06
+
+### Added
+- multi-block LOOP.md: `===` delimiters split prompts into sequential blocks with per-block wait conditions
+
 ## [0.21.0] - 2026-04-06
 
 ### Added

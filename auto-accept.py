@@ -222,6 +222,65 @@ def parse_interval_line(line):
     return None
 
 
+# Regex matching block delimiters: ===, ===idle===, ===60s===, ======31m===, etc.
+# 3+ leading equals, optional spec (idle | NNs/m/h), 3+ trailing equals when spec present.
+BLOCK_DELIMITER_RE = re.compile(r'^={3,}(?:(idle|\d+[smh])={3,})?$', re.IGNORECASE)
+
+
+def parse_delimiter(line):
+    """
+    Parse a === block delimiter line.
+
+    Returns (wait_type, wait_seconds) or None if the line is not a delimiter.
+    wait_type: "idle" — wait until Claude is idle
+               "timed" — wait a fixed number of seconds
+    wait_seconds: None for idle, int seconds for timed
+    """
+    m = BLOCK_DELIMITER_RE.match(line.strip())
+    if not m:
+        return None
+    spec = m.group(1)
+    if spec is None or spec.lower() == "idle":
+        return ("idle", None)
+    value = int(spec[:-1])
+    unit = spec[-1].lower()
+    seconds = value * {"s": 1, "m": 60, "h": 3600}[unit]
+    return ("timed", seconds)
+
+
+def parse_loop_blocks(text):
+    """
+    Split text by === delimiters into a list of loop blocks.
+
+    Each block is (prompt, wait_type, wait_seconds) where wait_type/wait_seconds
+    describe the wait condition AFTER sending this block, before the next one.
+
+    The last block (no trailing delimiter) gets ("idle", None) — the caller uses
+    the global interval for the wrap-around wait.
+    """
+    lines = text.split("\n")
+    blocks = []
+    current_lines = []
+
+    for line in lines:
+        delim = parse_delimiter(line)
+        if delim is not None:
+            # Finalize the accumulated block with this delimiter's wait spec
+            prompt = "\n".join(current_lines).strip()
+            if prompt:
+                blocks.append((prompt, delim[0], delim[1]))
+            current_lines = []
+        else:
+            current_lines.append(line)
+
+    # Last block — wrap-around uses idle wait with global interval
+    prompt = "\n".join(current_lines).strip()
+    if prompt:
+        blocks.append((prompt, "idle", None))
+
+    return blocks
+
+
 def find_loop_file():
     """
     Find LOOP.md using fallback order:
@@ -244,9 +303,12 @@ def find_loop_file():
 
 def parse_loop_file(path):
     """
-    Read LOOP.md and extract (interval_seconds, prompt_text).
+    Read LOOP.md and extract (global_interval, blocks).
 
-    Returns None if the file doesn't exist, is empty, or has no usable prompt.
+    blocks is a list of (prompt, wait_type, wait_seconds) tuples. The global
+    interval applies to idle waits that don't specify their own duration.
+
+    Returns None if the file doesn't exist, is empty, or has no usable blocks.
     """
     if path is None:
         return None
@@ -265,17 +327,21 @@ def parse_loop_file(path):
     interval = parse_interval_line(first_line)
 
     if interval is not None:
-        # First line was an interval spec — prompt is the rest
-        prompt = "\n".join(lines[1:]).strip()
+        # First line was an interval spec — content is the rest
+        remaining = "\n".join(lines[1:]).strip()
     else:
-        # First line is not an interval — entire file is the prompt
-        prompt = content.strip()
+        # First line is not an interval — entire file is content
+        remaining = content.strip()
         interval = LOOP_DEFAULT_INTERVAL
 
-    if not prompt:
+    if not remaining:
         return None
 
-    return (interval, prompt)
+    blocks = parse_loop_blocks(remaining)
+    if not blocks:
+        return None
+
+    return (interval, blocks)
 
 
 def format_interval(seconds):
@@ -352,7 +418,7 @@ def main():
     # ── Loop detection (before fork, while terminal is still cooked) ──
     loop_config = None
     loop_interval = None
-    loop_prompt = None
+    loop_blocks = None
 
     if LOOP_MODE:
         # Inline prompt from env var takes priority over LOOP.md file
@@ -360,8 +426,8 @@ def main():
         if env_prompt:
             env_interval = os.environ.get("CLAUDIUS_LOOP_INTERVAL", "")
             loop_interval = int(env_interval) if env_interval else LOOP_DEFAULT_INTERVAL
-            loop_prompt = env_prompt
-            loop_config = (loop_interval, loop_prompt)
+            loop_blocks = [(env_prompt, "idle", None)]
+            loop_config = (loop_interval, loop_blocks)
             print(
                 f"\r🔄 Loop active — will re-prompt every "
                 f"{format_interval(loop_interval)}\r\n",
@@ -371,16 +437,17 @@ def main():
             _loop_path = find_loop_file()
             loop_config = parse_loop_file(_loop_path)
             if loop_config:
-                loop_interval, loop_prompt = loop_config
+                loop_interval, loop_blocks = loop_config
                 _source = "~/.agents/LOOP.md" if "/.agents/" in (_loop_path or "") else "LOOP.md"
+                _block_info = f" ({len(loop_blocks)} blocks)" if len(loop_blocks) > 1 else ""
                 print(
-                    f"\r🔄 {_source} detected — will re-prompt every "
+                    f"\r🔄 {_source} detected{_block_info} — will re-prompt every "
                     f"{format_interval(loop_interval)}\r\n",
                     end="", flush=True,
                 )
 
         if loop_config:
-            log.debug("LOOP: interval=%ds, prompt=%r", loop_config[0], loop_config[1][:80])
+            log.debug("LOOP: interval=%ds, blocks=%d", loop_interval, len(loop_blocks))
 
     # Save original terminal settings so we can restore on exit
     old_termios = None
@@ -429,6 +496,11 @@ def main():
     last_child_output_time = time.monotonic()
     last_user_input_time = 0.0
     last_loop_prompt_time = 0.0
+
+    # Multi-block loop state — tracks position and current wait condition
+    loop_block_index = 0
+    loop_wait_type = "idle"      # wait condition before sending next block
+    loop_wait_seconds = None     # None = use global interval
 
     # Build the list of fds to select on
     read_fds = [master_fd]
@@ -536,26 +608,46 @@ def main():
                         # Clear the buffer so we don't re-trigger on residual text
                         output_buffer = ""
 
-            # ── Loop: re-prompt Claude when idle ──
-            if LOOP_MODE and loop_config:
+            # ── Loop: step through blocks and re-prompt Claude ──
+            if LOOP_MODE and loop_blocks:
                 now = time.monotonic()
                 idle = now - last_child_output_time
                 since_prompt = now - last_loop_prompt_time
                 since_input = now - last_user_input_time
 
-                if (idle >= LOOP_IDLE_THRESHOLD and
-                        since_prompt >= loop_interval and
-                        since_input >= LOOP_IDLE_THRESHOLD):
+                # Determine if the current wait condition is satisfied
+                should_send = False
+                if loop_wait_type == "timed":
+                    # Fixed delay — just wait the specified seconds
+                    should_send = since_prompt >= loop_wait_seconds
+                else:
+                    # Idle wait — Claude must be idle + minimum interval elapsed
+                    min_interval = loop_wait_seconds if loop_wait_seconds is not None else loop_interval
+                    should_send = (
+                        idle >= LOOP_IDLE_THRESHOLD
+                        and since_prompt >= min_interval
+                        and since_input >= LOOP_IDLE_THRESHOLD
+                    )
+
+                if should_send:
+                    prompt, next_wait_type, next_wait_seconds = loop_blocks[loop_block_index]
                     log.debug(
-                        "LOOP: Claude idle %.0fs, re-prompting (interval=%ds)",
-                        idle, loop_interval,
+                        "LOOP: sending block %d/%d (idle=%.0fs, wait=%s/%s)",
+                        loop_block_index + 1, len(loop_blocks),
+                        idle, loop_wait_type,
+                        f"{loop_wait_seconds}s" if loop_wait_seconds else "global",
                     )
                     try:
-                        os.write(master_fd, loop_prompt.encode("utf-8") + b"\r")
+                        os.write(master_fd, prompt.encode("utf-8") + b"\r")
                     except OSError:
                         pass
                     last_loop_prompt_time = now
                     output_buffer = ""
+
+                    # Advance to next block and set its wait condition
+                    loop_wait_type = next_wait_type
+                    loop_wait_seconds = next_wait_seconds
+                    loop_block_index = (loop_block_index + 1) % len(loop_blocks)
 
     except StopIteration:
         pass

@@ -179,12 +179,33 @@ claudius loop
 claudius yolo background loop
 ```
 
-The first line of `LOOP.md` can optionally specify an interval:
+The first line of `LOOP.md` can optionally specify a global interval:
 - Cron syntax: `*/5 * * * *` (every 5 minutes)
 - Human-readable: `10 minutes`, `4 hours`, `30 seconds`
 - If omitted, defaults to **30 minutes**
 
-The rest of the file is the prompt text sent to Claude. Re-prompting only triggers when Claude has been idle for at least 2 minutes and no user input has occurred.
+### Multi-block prompts
+
+Use `===` delimiters (3+ `=` characters) to split `LOOP.md` into multiple blocks that are sent sequentially:
+
+```markdown
+check for new issues and fix them
+===
+/clear
+===60s===
+summarize what you did
+```
+
+Each delimiter specifies the wait condition before sending the next block:
+
+| Delimiter | Meaning |
+|---|---|
+| `===` or `===idle===` | Wait until Claude is idle (default) |
+| `===60s===` | Wait 60 seconds |
+| `===10m===` | Wait 10 minutes |
+| `===2h===` | Wait 2 hours |
+
+After the last block, the loop wraps around to the first block using the global interval. Idle waits require Claude to be silent for 2 minutes with no user input. Timed waits are fixed delays regardless of activity.
 
 ## Authentication priority
 

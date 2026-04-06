@@ -25,7 +25,7 @@ Portable `statusline.sh` ships with the container image at `/usr/local/bin/statu
 
 ## Loop Modifier — Periodic Re-prompting (added 2026-03-26, refactored 2026-03-28)
 
-`loop` is a standalone chainable modifier. Prompt source fallback: inline string → `./LOOP.md` (case-insensitive) → `~/.agents/LOOP.md` (global default). First line parsed for interval (cron syntax, human-readable, defaults to 30 min). Inline prompt always uses 30-min interval. Idle detection: 120s of no child output + no user input. `entrypoint.sh` gates `auto-accept.py` on `CLAUDIUS_YOLO=1 || CLAUDIUS_LOOP=1`.
+`loop` is a standalone chainable modifier. Prompt source fallback: inline string → `./LOOP.md` (case-insensitive) → `~/.agents/LOOP.md` (global default). First line parsed for global interval (cron syntax, human-readable, defaults to 30 min). Inline prompt always uses 30-min interval. Idle detection: 120s of no child output + no user input. `entrypoint.sh` gates `auto-accept.py` on `CLAUDIUS_YOLO=1 || CLAUDIUS_LOOP=1`. Multi-block support (v0.22.0): `===` delimiters (3+ `=`) split LOOP.md into sequential blocks with per-block wait conditions (`===idle===`, `===60s===`, `===10m===`, `===2h===`). Timed waits bypass idle check; idle waits use global interval. Last block wraps around with idle wait.
 
 ## Host Notifications (added 2026-03-28)
 
