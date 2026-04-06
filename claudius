@@ -9,7 +9,7 @@ ORIGINAL_ARGS=("$@")
 # claudius — run Claude Code inside a Docker container
 # -----------------------------------------------------------
 
-CLAUDIUS_VERSION="0.22.1"
+CLAUDIUS_VERSION="0.22.2"
 REPO_URL="https://raw.githubusercontent.com/actuallymentor/sir-claudius/main/claudius?cachebust=$(date +%s)"
 
 IMAGE="${CLAUDE_SANDBOX_IMAGE:-actuallymentor/sir-claudius:latest}"
@@ -93,11 +93,11 @@ LOOP.md format:
     summarize what you did
 
   Delimiter formats:
-    ===              Wait until Claude is idle (default)
-    ===idle===       Same — explicit idle wait
-    ===60s===        Wait 60 seconds
-    ===10m===        Wait 10 minutes
-    ===2h===         Wait 2 hours
+    ===              Wait the global interval, then send next block
+    ===idle===       Wait until Claude is idle (120s of silence)
+    ===60s===        Wait exactly 60 seconds
+    ===10m===        Wait exactly 10 minutes
+    ===2h===         Wait exactly 2 hours
 
   After the last block, the loop wraps around using the global interval.
 

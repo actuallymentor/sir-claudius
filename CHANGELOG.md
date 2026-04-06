@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.22.2] - 2026-04-06
+
+### Fixed
+- bare `===` delimiter now uses global interval as timed wait instead of requiring 120s idle silence
+- initial loop block fires after global interval instead of waiting for 120s idle threshold
+- `parse_interval_line()` accepts single-letter units (`5s`, `10m`, `2h`, `1d`)
+
 ## [0.22.1] - 2026-04-06
 
 ### Changed

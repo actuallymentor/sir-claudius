@@ -204,7 +204,7 @@ def parse_interval_line(line):
     # ── Human-readable: look for a number followed by a time unit ──
     m = re.search(
         r'(\d+)\s*'
-        r'(seconds?|secs?|minutes?|mins?|hours?|hrs?|days?)',
+        r'(seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h|days?|d)',
         line, re.IGNORECASE,
     )
     if m:
@@ -232,16 +232,20 @@ def parse_delimiter(line):
     Parse a === block delimiter line.
 
     Returns (wait_type, wait_seconds) or None if the line is not a delimiter.
-    wait_type: "idle" — wait until Claude is idle
+    wait_type: "idle" — wait until Claude is idle (120s silence)
                "timed" — wait a fixed number of seconds
-    wait_seconds: None for idle, int seconds for timed
+               "interval" — wait using the global loop interval
+    wait_seconds: None for idle/interval, int seconds for timed
     """
     m = BLOCK_DELIMITER_RE.match(line.strip())
     if not m:
         return None
     spec = m.group(1)
-    if spec is None or spec.lower() == "idle":
+    if spec is not None and spec.lower() == "idle":
         return ("idle", None)
+    if spec is None:
+        # Bare === means "wait the global interval", not "wait for 120s idle"
+        return ("interval", None)
     value = int(spec[:-1])
     unit = spec[-1].lower()
     seconds = value * {"s": 1, "m": 60, "h": 3600}[unit]
@@ -255,8 +259,13 @@ def parse_loop_blocks(text):
     Each block is (prompt, wait_type, wait_seconds) where wait_type/wait_seconds
     describe the wait condition AFTER sending this block, before the next one.
 
-    The last block (no trailing delimiter) gets ("idle", None) — the caller uses
-    the global interval for the wrap-around wait.
+    Wait types:
+      "interval" — bare === or last block: wait the global loop interval
+      "idle"     — ===idle===: wait for 120s of Claude silence
+      "timed"    — ===10s===: wait exactly N seconds
+
+    The last block (no trailing delimiter) gets ("interval", None) — wraps
+    around using the global interval.
     """
     lines = text.split("\n")
     blocks = []
@@ -273,10 +282,10 @@ def parse_loop_blocks(text):
         else:
             current_lines.append(line)
 
-    # Last block — wrap-around uses idle wait with global interval
+    # Last block — wrap-around uses the global interval (same as bare ===)
     prompt = "\n".join(current_lines).strip()
     if prompt:
-        blocks.append((prompt, "idle", None))
+        blocks.append((prompt, "interval", None))
 
     return blocks
 
@@ -495,12 +504,16 @@ def main():
     # LOOP.md idle tracking — timestamps for detecting when Claude goes quiet
     last_child_output_time = time.monotonic()
     last_user_input_time = 0.0
-    last_loop_prompt_time = 0.0
+    # Start prompt timer at now so the initial timed wait counts from startup,
+    # not from epoch 0 (which would fire immediately).
+    last_loop_prompt_time = time.monotonic()
 
     # Multi-block loop state — tracks position and current wait condition
     loop_block_index = 0
-    loop_wait_type = "idle"      # wait condition before sending next block
-    loop_wait_seconds = None     # None = use global interval
+    # Use the global interval for the initial block so it fires after
+    # loop_interval seconds instead of waiting for the 120s idle threshold.
+    loop_wait_type = "interval" if loop_blocks else "idle"
+    loop_wait_seconds = None
 
     # Build the list of fds to select on
     read_fds = [master_fd]
@@ -620,8 +633,11 @@ def main():
                 if loop_wait_type == "timed":
                     # Fixed delay — just wait the specified seconds
                     should_send = since_prompt >= loop_wait_seconds
+                elif loop_wait_type == "interval":
+                    # Bare === separator — wait the global interval (timed, not idle)
+                    should_send = since_prompt >= loop_interval
                 else:
-                    # Idle wait — Claude must be idle + minimum interval elapsed
+                    # Explicit ===idle=== — Claude must be idle + minimum interval elapsed
                     min_interval = loop_wait_seconds if loop_wait_seconds is not None else loop_interval
                     should_send = (
                         idle >= LOOP_IDLE_THRESHOLD
