@@ -9,7 +9,7 @@ ORIGINAL_ARGS=("$@")
 # claudius — run Claude Code inside a Docker container
 # -----------------------------------------------------------
 
-CLAUDIUS_VERSION="0.20.2"
+CLAUDIUS_VERSION="0.21.0"
 REPO_URL="https://raw.githubusercontent.com/actuallymentor/sir-claudius/main/claudius?cachebust=$(date +%s)"
 
 IMAGE="${CLAUDE_SANDBOX_IMAGE:-actuallymentor/sir-claudius:latest}"
@@ -33,7 +33,7 @@ Usage: claudius [command...] [options] [-- claude args...]
 Commands (chainable — combine in any order):
   yolo        Run with blanket permissions and auto-accept plans (30s review window)
   background  Run in a persistent tmux session (close terminal to detach)
-  loop        Re-prompt Claude when idle (reads LOOP.md, or pass a prompt string)
+  loop        Re-prompt Claude when idle (inline string > ./LOOP.md > ~/.agents/LOOP.md)
   sandbox     Run without mounting a workspace; host files are read-only
   mudbox      Mount the workspace as read-only (explore code without modifying it)
   worktree    Create an isolated git worktree (parallel sessions, resumable)
@@ -62,7 +62,7 @@ Examples:
   claudius yolo                     Skip permissions + auto-accept plans (30s review)
   claudius background               Persistent tmux session (close terminal to detach)
   claudius yolo background          Full autonomy in tmux
-  claudius loop                     Re-prompt from LOOP.md when idle
+  claudius loop                     Re-prompt from LOOP.md (project, then ~/.agents/) when idle
   claudius loop "check for errors"  Re-prompt with custom string every 30 minutes
   claudius yolo background loop     Full autonomy in tmux with periodic re-prompting
   claudius sessions                 List active background tmux sessions (with attach commands)
@@ -2071,10 +2071,18 @@ if [ "$LOOP" = true ] && [ "$SANDBOX" = false ]; then
         docker_flags+=( -e "CLAUDIUS_LOOP_INTERVAL=$LOOP_INTERVAL" )
         docker_flags+=( -e "CLAUDIUS_LOOP_PROMPT=$LOOP_PROMPT" )
     else
-        # Find LOOP.md case-insensitively
+        # Find LOOP.md: check project dir first, then ~/.agents/LOOP.md
         _loop_dir="$(pwd)"
         [ "$WORKTREE" = true ] && [ -n "${WORKTREE_DIR:-}" ] && _loop_dir="$WORKTREE_DIR"
         _loop_file=$(find "$_loop_dir" -maxdepth 1 -iname "loop.md" -print -quit 2>/dev/null)
+
+        # Fall back to global ~/.agents/LOOP.md
+        if [ -z "$_loop_file" ] || [ ! -s "$_loop_file" ]; then
+            _global_loop="$HOME/.agents/LOOP.md"
+            if [ -s "$_global_loop" ]; then
+                _loop_file="$_global_loop"
+            fi
+        fi
 
         if [ -n "$_loop_file" ] && [ -s "$_loop_file" ]; then
             LOOP_INTERVAL=$(python3 -c "
@@ -2096,7 +2104,8 @@ print(1800)
 " "$_loop_file" 2>/dev/null || echo "1800")
             docker_flags+=( -e "CLAUDIUS_LOOP_INTERVAL=$LOOP_INTERVAL" )
         else
-            echo "Warning: loop modifier active but no LOOP.md found. Loop re-prompting will be inactive." >&2
+            echo "Warning: loop modifier active but no LOOP.md found (checked project dir and ~/.agents/)." >&2
+            echo "Loop re-prompting will be inactive." >&2
         fi
     fi
 fi

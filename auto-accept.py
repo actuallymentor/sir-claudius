@@ -223,11 +223,22 @@ def parse_interval_line(line):
 
 
 def find_loop_file():
-    """Find LOOP.md case-insensitively in /workspace."""
+    """
+    Find LOOP.md using fallback order:
+      1. /workspace/LOOP.md (case-insensitive)
+      2. ~/.agents/LOOP.md (host-mounted, read-only)
+    """
+    # Check /workspace first (case-insensitive)
     if os.path.isfile(LOOP_FILE):
         return LOOP_FILE
     for f in glob.glob("/workspace/[Ll][Oo][Oo][Pp].[Mm][Dd]"):
         return f
+
+    # Fall back to ~/.agents/LOOP.md (mounted from host)
+    global_loop = os.path.expanduser("~/.agents/LOOP.md")
+    if os.path.isfile(global_loop):
+        return global_loop
+
     return None
 
 
@@ -357,11 +368,13 @@ def main():
                 end="", flush=True,
             )
         else:
-            loop_config = parse_loop_file(find_loop_file())
+            _loop_path = find_loop_file()
+            loop_config = parse_loop_file(_loop_path)
             if loop_config:
                 loop_interval, loop_prompt = loop_config
+                _source = "~/.agents/LOOP.md" if "/.agents/" in (_loop_path or "") else "LOOP.md"
                 print(
-                    f"\r🔄 LOOP.md detected — will re-prompt every "
+                    f"\r🔄 {_source} detected — will re-prompt every "
                     f"{format_interval(loop_interval)}\r\n",
                     end="", flush=True,
                 )

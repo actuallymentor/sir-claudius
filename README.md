@@ -157,14 +157,22 @@ If both `sandbox` and `mudbox` are specified, `mudbox` takes priority (you get a
 
 ## Periodic re-prompting (loop modifier)
 
-The `loop` modifier re-prompts Claude when it goes idle. You can provide a prompt inline or via a `LOOP.md` file (case-insensitive).
+The `loop` modifier re-prompts Claude when it goes idle. The prompt source follows a fallback chain:
+
+1. **Inline string** — `claudius loop "your prompt"` (always 30-minute interval)
+2. **Project `LOOP.md`** — a `LOOP.md` file in the current directory (case-insensitive)
+3. **Global `~/.agents/LOOP.md`** — a shared default for all projects
 
 ```sh
 # Inline prompt — re-prompts every 30 minutes
 claudius loop "check for new issues and fix them"
 
-# From LOOP.md — create the file first
+# From project LOOP.md — create the file first
 echo "Check for new issues and fix them" > LOOP.md
+claudius loop
+
+# Or use a global default in ~/.agents/LOOP.md
+echo "Check for new issues and fix them" > ~/.agents/LOOP.md
 claudius loop
 
 # Combine with yolo and background for full autonomy

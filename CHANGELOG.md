@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.21.0] - 2026-04-06
+
+### Added
+- loop prompt fallback chain: inline string > `./LOOP.md` > `~/.agents/LOOP.md`
+
 ## [0.20.2] - 2026-04-01
 
 ### Fixed
