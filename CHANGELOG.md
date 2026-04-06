@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.22.1] - 2026-04-06
+
+### Changed
+- loop modifier shows its source in statusline: `loop(string)`, `loop(./)`, or `loop(~/.agents)`
+
 ## [0.22.0] - 2026-04-06
 
 ### Added

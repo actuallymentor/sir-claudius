@@ -9,7 +9,7 @@ ORIGINAL_ARGS=("$@")
 # claudius — run Claude Code inside a Docker container
 # -----------------------------------------------------------
 
-CLAUDIUS_VERSION="0.22.0"
+CLAUDIUS_VERSION="0.22.1"
 REPO_URL="https://raw.githubusercontent.com/actuallymentor/sir-claudius/main/claudius?cachebust=$(date +%s)"
 
 IMAGE="${CLAUDE_SANDBOX_IMAGE:-actuallymentor/sir-claudius:latest}"
@@ -2083,10 +2083,12 @@ fi
 
 # Detect loop prompt source and parse the interval for the statusline
 LOOP_INTERVAL=""
+LOOP_SOURCE=""
 if [ "$LOOP" = true ] && [ "$SANDBOX" = false ]; then
     if [ -n "$LOOP_PROMPT" ]; then
         # Inline prompt — use default 30-minute interval
         LOOP_INTERVAL=1800
+        LOOP_SOURCE="string"
         docker_flags+=( -e "CLAUDIUS_LOOP_INTERVAL=$LOOP_INTERVAL" )
         docker_flags+=( -e "CLAUDIUS_LOOP_PROMPT=$LOOP_PROMPT" )
     else
@@ -2094,16 +2096,19 @@ if [ "$LOOP" = true ] && [ "$SANDBOX" = false ]; then
         _loop_dir="$(pwd)"
         [ "$WORKTREE" = true ] && [ -n "${WORKTREE_DIR:-}" ] && _loop_dir="$WORKTREE_DIR"
         _loop_file=$(find "$_loop_dir" -maxdepth 1 -iname "loop.md" -print -quit 2>/dev/null)
+        _loop_from="./"
 
         # Fall back to global ~/.agents/LOOP.md
         if [ -z "$_loop_file" ] || [ ! -s "$_loop_file" ]; then
             _global_loop="$HOME/.agents/LOOP.md"
             if [ -s "$_global_loop" ]; then
                 _loop_file="$_global_loop"
+                _loop_from="~/.agents"
             fi
         fi
 
         if [ -n "$_loop_file" ] && [ -s "$_loop_file" ]; then
+            LOOP_SOURCE="$_loop_from"
             LOOP_INTERVAL=$(python3 -c "
 import re, sys
 line = open(sys.argv[1]).readline().strip()
@@ -2133,7 +2138,7 @@ fi
 _mods=""
 [ "$YOLO" = true ] && _mods="${_mods:+$_mods }yolo"
 [ "$BACKGROUND" = true ] && _mods="${_mods:+$_mods }background"
-[ "$LOOP" = true ] && _mods="${_mods:+$_mods }loop"
+[ "$LOOP" = true ] && _mods="${_mods:+$_mods }loop${LOOP_SOURCE:+($LOOP_SOURCE)}"
 [ "$MUDBOX" = true ] && _mods="${_mods:+$_mods }mudbox"
 [ "$SANDBOX" = true ] && _mods="${_mods:+$_mods }sandbox"
 [ "$WORKTREE" = true ] && _mods="${_mods:+$_mods }worktree"
@@ -2436,7 +2441,7 @@ if [ -f "$HISTORY_FILE" ]; then
             modifiers=""
             [ "$YOLO" = true ] && modifiers="$modifiers yolo"
             [ "$BACKGROUND" = true ] && modifiers="$modifiers background"
-            [ "$LOOP" = true ] && modifiers="$modifiers loop"
+            [ "$LOOP" = true ] && modifiers="$modifiers loop${LOOP_SOURCE:+($LOOP_SOURCE)}"
             [ "$SANDBOX" = true ] && modifiers="$modifiers sandbox"
             [ "$MUDBOX" = true ] && modifiers="$modifiers mudbox"
             # Worktree modifier includes the ID for reverse lookup
