@@ -548,6 +548,9 @@ def main():
     loop_wait_type = "interval" if loop_blocks else "idle"
     loop_wait_seconds = None
 
+    # Terminal title countdown — updates every second for real-time feedback
+    last_title_update = 0.0
+
     # Write the initial deadline so the statusline can start counting down
     if LOOP_MODE and loop_blocks:
         write_loop_deadline(loop_wait_type, loop_wait_seconds, loop_interval)
@@ -705,6 +708,20 @@ def main():
                     # Update the deadline for the statusline countdown
                     write_loop_deadline(loop_wait_type, loop_wait_seconds, loop_interval)
 
+                # ── Live countdown in terminal title (updates every second) ──
+                if now - last_title_update >= 1.0:
+                    last_title_update = now
+                    if loop_wait_type == "idle":
+                        _title = "\033]0;⏱ idle\007"
+                    else:
+                        _delay = loop_wait_seconds if loop_wait_type == "timed" else loop_interval
+                        _remaining = max(0, int(_delay - (now - last_loop_prompt_time)))
+                        _title = f"\033]0;⏱ {format_hms(_remaining)}\007"
+                    try:
+                        os.write(stdout_fd, _title.encode())
+                    except OSError:
+                        pass
+
     except StopIteration:
         pass
     except KeyboardInterrupt:
@@ -718,6 +735,12 @@ def main():
         # Without this, the terminal stays in raw mode (no echo, no line editing).
         if old_termios is not None:
             termios.tcsetattr(stdin_fd, termios.TCSADRAIN, old_termios)
+        # Clear the terminal title and deadline file
+        if LOOP_MODE:
+            try:
+                os.write(stdout_fd, b"\033]0;\007")
+            except OSError:
+                pass
         clear_loop_deadline()
 
     # Wait for the child and propagate its exit code

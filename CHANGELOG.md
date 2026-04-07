@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.24.0] - 2026-04-07
+
+### Added
+- real-time loop countdown in terminal title via OSC escape (updates every second)
+
 ## [0.23.0] - 2026-04-06
 
 ### Added
