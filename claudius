@@ -9,11 +9,12 @@ ORIGINAL_ARGS=("$@")
 # claudius — run Claude Code inside a Docker container
 # -----------------------------------------------------------
 
-CLAUDIUS_VERSION="0.24.0"
+CLAUDIUS_VERSION="0.25.0"
 REPO_URL="https://raw.githubusercontent.com/actuallymentor/sir-claudius/main/claudius?cachebust=$(date +%s)"
 
 IMAGE="${CLAUDE_SANDBOX_IMAGE:-actuallymentor/sir-claudius:latest}"
-MODEL="${CLAUDE_MODEL:-claude-opus-4-6}"
+MODEL="${CLAUDE_MODEL:-opus}"
+EFFORT="${CLAUDE_EFFORT:-max}"
 TOKEN_FILE="$HOME/.claude-sandbox-token"
 CONTAINER_HOME="/home/node"
 
@@ -103,7 +104,8 @@ LOOP.md format:
 
 Environment variables:
   CLAUDE_SANDBOX_IMAGE   Docker image to use (default: actuallymentor/sir-claudius:latest)
-  CLAUDE_MODEL           Model to use (default: claude-opus-4-6)
+  CLAUDE_MODEL           Model to use (default: opus)
+  CLAUDE_EFFORT          Effort level: low, medium, high, xhigh, max (default: max)
   CLAUDE_CODE_OAUTH_TOKEN  OAuth token (skips credential lookup)
   ANTHROPIC_API_KEY      API key (fallback if no OAuth token)
   CLAUDIUS_NPM_ISOLATE   Set to 1 to always isolate, 0 to never isolate (default: auto-detect)
@@ -1388,8 +1390,8 @@ if [ "$BACKGROUND" = true ] && [ -z "${CLAUDIUS_IN_TMUX:-}" ]; then
     # ensures fresh values reach the re-exec.
     _tmux_cmd="env CLAUDIUS_IN_TMUX=1 CLAUDIUS_TMUX_SESSION=$(printf '%q' "$_tmux_session")"
     for _var in ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN CLAUDE_MODEL \
-                CLAUDE_SANDBOX_IMAGE CLAUDE_SESSION_KEY CLAUDE_ORG_ID \
-                CLAUDIUS_DIR CLAUDIUS_NPM_ISOLATE GH_TOKEN; do
+                CLAUDE_EFFORT CLAUDE_SANDBOX_IMAGE CLAUDE_SESSION_KEY \
+                CLAUDE_ORG_ID CLAUDIUS_DIR CLAUDIUS_NPM_ISOLATE GH_TOKEN; do
         eval "_val=\${${_var}:-}"
         [ -n "$_val" ] && _tmux_cmd="$_tmux_cmd ${_var}=$(printf '%q' "$_val")"
     done
@@ -2039,8 +2041,9 @@ if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
     docker_flags+=( -e "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY" )
 fi
 
-# Set the model
+# Set the model and effort
 docker_flags+=( -e "CLAUDE_MODEL=$MODEL" )
+docker_flags+=( -e "CLAUDE_EFFORT=$EFFORT" )
 
 # Expose the run mode inside the container for scripts and agents to check
 # Priority: yolo > mudbox > sandbox > regular
@@ -2147,7 +2150,7 @@ _mods=""
 docker_flags+=( -e "CLAUDIUS_MODIFIERS=${_mods:-default}" )
 
 # Build Claude CLI flags
-claude_flags=( --model "$MODEL" )
+claude_flags=( --model "$MODEL" --effort "$EFFORT" )
 
 # Base system prompt: orient Claude to the container environment
 SYSTEM_PROMPT="You are running inside a Claudius Docker container — an isolated sandbox built for coding agents. You have passwordless sudo for any operation that needs root. Your workspace is /workspace (bind-mounted from the host). For a full reference of installed CLI tools and capabilities, read ~/AGENTS.md.

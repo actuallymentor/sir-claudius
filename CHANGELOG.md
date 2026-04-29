@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.25.0] - 2026-04-29
+
+### Changed
+- default model shortened from `claude-opus-4-6` to `opus` alias
+
+### Added
+- `CLAUDE_EFFORT` env var and `--effort` flag (default: max)
+
 ## [0.24.0] - 2026-04-07
 
 ### Added
